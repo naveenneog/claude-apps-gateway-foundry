@@ -141,6 +141,12 @@ try {
     }
     if (Test-AzPlan) { Write-Host "Plan: $((Get-AzPlanned).Count) command(s) would change the subscription; nothing was changed." }
     elseif ($c.ContainsKey('Fqdn')) { Write-Host "Gateway: https://$($c.Fqdn) (private; resolves inside $($c.Vnet) only)" }
+} catch {
+    # Without the line breaks PowerShell's error view adds at the console width, on Linux inside a word, so a command,
+    # digest or URL in the message stays whole (GitHub Actions run 36715159255, 2026-09-30).
+    $red, $reset = if ([Console]::IsErrorRedirected) { '', '' } else { $PSStyle.Formatting.Error, $PSStyle.Reset }
+    [Console]::Error.WriteLine("${red}Deploy-Gateway.ps1: $($_.Exception.Message)$reset")
+    exit 1
 } finally {
     Clear-AzSecrets
 }

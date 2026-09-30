@@ -144,12 +144,15 @@ shows each step's commands (docs/adr/0005-network-restricted-deployment.md:56-60
 ### Deploy-Gateway.ps1
 
 Runs in PowerShell 7.2 or later with the Azure CLI signed in. Each step creates what is missing and reports what it
-finds with `FOUND`; a failed `az` command stops the run with exit code 1. Secrets reach the Azure CLI as `@<file>`
-arguments in a temporary folder that the script deletes at the end (infra/azure-private/lib/Az.psm1:1-10).
+finds with `FOUND`. A step that stops, on a failed `az` command among other causes, writes `Deploy-Gateway.ps1: <message>`
+to standard error without the line breaks PowerShell's error view adds at the console width, so a command or URL in
+the message stays whole; a message that holds line breaks of its own keeps them, and the script's line number is not
+printed. The run exits with code 1 (infra/azure-private/Deploy-Gateway.ps1:144-149). Secrets reach the Azure CLI as `@<file>` arguments in a temporary folder
+that the script deletes at the end (infra/azure-private/lib/Az.psm1:1-10).
 
 | Parameter | Meaning |
 |---|---|
-| `-Step` | One or more of `network`, `dns`, `foundry`, `postgres`, `registry`, `identity`, `environment`, `entra`, `app`, `devvm`, `verify`, or `all` (default); a comma-separated list also works from `pwsh -File`. A step that needs names from earlier steps reads them without changing them |
+| `-Step` | One or more of `network`, `dns`, `foundry`, `postgres`, `registry`, `identity`, `environment`, `telemetry`, `entra`, `app`, `devvm`, `verify`, or `all` (default); a comma-separated list also works from `pwsh -File`. A step that needs names from earlier steps reads them without changing them |
 | `-Plan` | Reads the subscription and prints each command that would change it, then `Plan: <n> command(s) would change the subscription`; changes nothing |
 | `-ResourceGroup` | Default `rg-claude-gw-internal`; the six-digit suffix of global names derives from it and the subscription ID |
 | `-Location` | Region of the network, the gateway, PostgreSQL and the test machine; default `northcentralus` |

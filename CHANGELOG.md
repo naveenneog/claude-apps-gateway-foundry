@@ -47,6 +47,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - `.github/workflows/ironclad.yml` runs with a read-only token and pins each action to a commit.
 
 ### Fixed
+- `Deploy-Gateway.ps1` writes the message of a step that stops as `Deploy-Gateway.ps1: <message>` on standard error,
+  without the line breaks PowerShell's error view adds. The view broke long messages at the console width, on Linux inside a word, which split
+  the `az acr repository untag` command and Graph URLs the messages name, and failed the public repository's CI (run
+  36715159255).
 - `Deploy-Gateway.ps1 -Step app` counted a secret read that failed for any reason as a missing secret. On 2026-09-30 the
   Container Apps service answered 503 to a read, and the step appended a new client secret to the app registration; the
   same path could have made a new session-signing secret or a new PostgreSQL password. The step now reads every secret it

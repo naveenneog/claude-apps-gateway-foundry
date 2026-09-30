@@ -298,6 +298,18 @@ test('T-79 a collector tag at another digest stops the telemetry step before any
   assert.deepEqual(r.planned, [], 'a change was planned before the digest was checked');
 });
 
+test('T-74 a step that stops prints its message as one line, so a command, digest or URL in it stays whole', { skip }, (t) => {
+  // pwsh's error view breaks a long message at the console width, inside a word on Linux: on 2026-09-30 the public
+  // repository's CI read "appRoleAssignedTo?$skipt oken=page-2" (GitHub Actions run 36715159255).
+  const world = fullWorld();
+  world[`acr repository show --image ${COLLECTOR_TAG}`] = { digest: OTHER_DIGEST };
+  const r = run(t, world, ['-Plan', '-Step', 'telemetry']);
+  assert.equal(r.status, 1, r.out);
+  const message = `The image ${COLLECTOR_TAG} in acrclaudegw${suffix} has digest ${OTHER_DIGEST}, not the pinned ${COLLECTOR_DIGEST}. `
+    + `Remove the tag, and the step imports the pinned release: az acr repository untag -n acrclaudegw${suffix} --image ${COLLECTOR_TAG}`;
+  assert.match(r.out, new RegExp(`^Deploy-Gateway\\.ps1: ${esc(message)}\\r?$`, 'm'));
+});
+
 test('T-79 after the import the step reads the digest again, and stops when the registry does not hold the pinned one', { skip }, (t) => {
   const world = { ...fullWorld(), [`acr repository show --image ${COLLECTOR_TAG}`]: { sequence: [null, { digest: OTHER_DIGEST }] } };
   const r = run(t, world, ['-Step', 'telemetry']);
