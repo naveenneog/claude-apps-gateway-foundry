@@ -96,3 +96,27 @@ test('T-73 --topology private needs the deployment block, an unknown topology is
   assert.equal(check.status, 0, check.stderr);
   assert.equal(render(JSON.parse(read('config/gateway-admin.azure-private.json'))), read('config/gateway.azure-private.yaml'));
 });
+
+test('T-79 private topology: telemetry sends metrics only to the collector sidecar, and each policy keeps sessions and accounts out of the series', () => {
+  const yaml = render(privateAdmin({ telemetry: true }));
+  // ADR-0007: one destination on the gateway's loopback, metrics only (ADR-0002); the sidecar exports to Application Insights.
+  assert.equal(section(yaml, 'telemetry'), [
+    'telemetry:',
+    '  forward_to:',
+    '    - url: http://localhost:4318',
+    '      metrics: true',
+    '      logs: false',
+    '      traces: false',
+  ].join('\n'));
+  const managed = section(yaml, 'managed');
+  assert.equal(managed.match(/^ {8}env:$/gm)?.length, 2, `an env block in each policy's cli settings:\n${managed}`);
+  for (const name of ['OTEL_METRICS_INCLUDE_SESSION_ID', 'OTEL_METRICS_INCLUDE_ACCOUNT_UUID']) {
+    assert.equal(managed.match(new RegExp(`^ {10}${name}: "false"$`, 'gm'))?.length, 2, `${name} in each policy:\n${managed}`);
+  }
+  for (const off of [render(privateAdmin({ telemetry: false })), render(privateAdmin()), render(privateAdmin({ telemetry: 'yes' }))]) {
+    assert.doesNotMatch(off, /telemetry:|forward_to|OTEL_/, 'telemetry is on only when the admin file sets it to true');
+  }
+  assert.deepEqual(adminErrors(privateAdmin({ telemetry: true }), ROLES), []);
+  assert.ok(adminErrors(privateAdmin({ telemetry: 'yes' }), ROLES).some((e) => e.startsWith('deployment.telemetry')), 'a non-boolean telemetry was accepted');
+  assert.equal(JSON.parse(read('config/gateway-admin.azure-private.json')).deployment.telemetry, true, 'the deployment\'s admin file turns telemetry on');
+});

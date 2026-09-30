@@ -99,6 +99,20 @@ try {
     $result = Invoke-OnDevVm $c 'vm-verify.ps1' $inside
     if (-not $result) { return }
     $seen = $result.Out.Trim() | ConvertFrom-Json
+    $status = Get-FoundryOutsideStatus $c
+    $server = Invoke-AzRead @('postgres', 'flexible-server', 'show', '-g', $c.ResourceGroup, '-n', $c.Postgres)
+    $checks = Get-VerifyChecks $seen $status $server.network.publicNetworkAccess
+    foreach ($k in $checks.Keys) { Write-Host ('  {0}  {1}' -f $(if ($checks[$k]) { 'PASS' } else { 'FAIL' }), $k) }
+    Write-Host "  addresses: gateway $(@($seen.gateway) -join ',') postgres $(@($seen.postgres) -join ',') foundry $(@($seen.foundry) -join ',')"
+    Write-Host "  certificate: $(ConvertTo-Json -Compress $seen.certificate)"
+    $failed = @($checks.Values | Where-Object { -not $_ }).Count
+    # ADR-0007: the sidecar's path to Application Insights, checked from inside the gateway app (T-78, T-32).
+    if ($c.Telemetry) { Test-TelemetryDelivery $c }
+    if ($failed) { throw 'a check failed' }
+}
+
+# The HTTP status Foundry gives a request from this machine, outside the VNet (T-68), or 0 when it gives no answer.
+function Get-FoundryOutsideStatus($c) {
     $token = Invoke-AzSecretRead @('account', 'get-access-token', '--resource', 'https://ai.azure.com', '--query', 'accessToken')
     # HttpClient rather than Invoke-WebRequest, so the token is not a cmdlet parameter that module logging records.
     $http = [Net.Http.HttpClient]::new()
@@ -111,12 +125,7 @@ try {
         $status = [int]$http.SendAsync($request).GetAwaiter().GetResult().StatusCode
     } catch { Write-Host "  Foundry gave no answer from this machine: $($_.Exception.InnerException.Message)" }
     finally { $http.Dispose() }
-    $server = Invoke-AzRead @('postgres', 'flexible-server', 'show', '-g', $c.ResourceGroup, '-n', $c.Postgres)
-    $checks = Get-VerifyChecks $seen $status $server.network.publicNetworkAccess
-    foreach ($k in $checks.Keys) { Write-Host ('  {0}  {1}' -f $(if ($checks[$k]) { 'PASS' } else { 'FAIL' }), $k) }
-    Write-Host "  addresses: gateway $(@($seen.gateway) -join ',') postgres $(@($seen.postgres) -join ',') foundry $(@($seen.foundry) -join ',')"
-    Write-Host "  certificate: $(ConvertTo-Json -Compress $seen.certificate)"
-    if (@($checks.Values | Where-Object { -not $_ }).Count) { throw 'a check failed' }
+    $status
 }
 
 # RFC 1918 and carrier-grade NAT space: the addresses /login accepts without gatewayInternalNetworks

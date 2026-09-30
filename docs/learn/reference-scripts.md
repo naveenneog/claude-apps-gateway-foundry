@@ -92,10 +92,12 @@ The admin scripts reuse the deployment's libraries in `infra/azure-test/lib`
 
 Renders `config/gateway.azure-test.yaml` from `config/gateway-admin.azure-test.json`, or with `--topology private`
 `config/gateway.azure-private.yaml` from `config/gateway-admin.azure-private.json`. The header of the output names the
-admin file it was rendered from (scripts/admin/new-gateway-config.mjs:166, scripts/admin/new-gateway-config.mjs:207).
+admin file it was rendered from (scripts/admin/new-gateway-config.mjs:170, scripts/admin/new-gateway-config.mjs:225).
 The private topology reads the admin file's `deployment` block: the developer networks for `access_control.allow_cidrs`,
-the per-address sign-in limits, `store.max_connections`, and the Claude Desktop opt-in on each policy
-(scripts/admin/new-gateway-config.mjs:196-236).
+the per-address sign-in limits, `store.max_connections`, the Claude Desktop opt-in on each policy, and `telemetry`, which adds
+the one metrics-only destination on the OpenTelemetry Collector sidecar and sets each policy's
+`OTEL_METRICS_INCLUDE_SESSION_ID` and `OTEL_METRICS_INCLUDE_ACCOUNT_UUID` to `false` (ADR-0007)
+(scripts/admin/new-gateway-config.mjs:200-255).
 
 | Option | Meaning |
 |---|---|
@@ -171,7 +173,7 @@ arguments in a temporary folder that the script deletes at the end (infra/azure-
 | `-RotateClientSecret` | Adds a new client secret to the app registration and deploys it |
 | `-ShowDevVmPassword` | Prints the test machine's user name and password, saved for the current Windows user with DPAPI, and exits |
 
-The parameters and their defaults are in infra/azure-private/Deploy-Gateway.ps1:26-58.
+The parameters and their defaults are in infra/azure-private/Deploy-Gateway.ps1:29-61.
 
 ## Test scripts
 

@@ -71,15 +71,36 @@ function Invoke-AzProcess([string[]]$Arguments) {
 }
 
 $script:NotFound = 'ResourceNotFound|ResourceGroupNotFound|ParentResourceNotFound|NotFound|not found|could not be found|does not exist|Code: 404|\(404\)'
+# The Azure CLI's answer for a Container App secret the app does not have (measured 2026-09-30).
+$script:SecretNotFound = 'does not have a secret assigned with name'
+
+# A command that opens a session, such as az containerapp exec: standard input is closed, so the session ends with its
+# command, and a session that outlasts the timeout is stopped.
+function Invoke-AzSession {
+    param([Parameter(Mandatory)][string[]]$Arguments, [int]$TimeoutSeconds = 180)
+    $psi = [Diagnostics.ProcessStartInfo]::new($script:Az.File)
+    foreach ($a in @($script:Az.Prefix) + $Arguments) { $psi.ArgumentList.Add($a) }
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $p = [Diagnostics.Process]::Start($psi)
+    $p.StandardInput.Close()
+    $out = $p.StandardOutput.ReadToEndAsync()
+    $err = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutSeconds * 1000)) { $p.Kill($true); throw "az $($Arguments[0..1] -join ' ') did not end within $TimeoutSeconds seconds" }
+    [pscustomobject]@{ Code = $p.ExitCode; Out = $out.Result; Err = $err.Result }
+}
 
 # A read: the parsed JSON, or $null when az reports that the resource does not exist. Some show commands answer a
 # missing child resource with {} and exit code 0, such as az network private-endpoint dns-zone-group show; an object
-# without properties counts as missing too.
+# without properties counts as missing too. With -Required, an answer that the resource does not exist is a failure.
 function Invoke-AzRead {
-    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Arguments)
+    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Arguments, [switch]$Required)
     $r = Invoke-AzProcess ($Arguments + @('--output', 'json'))
     if ($r.Code -ne 0) {
-        if ($r.Err -match $script:NotFound) { return $null }
+        if (-not $Required -and $r.Err -match $script:NotFound) { return $null }
         throw "az $(Format-AzCommand $Arguments) failed ($($r.Code)): $($r.Err.Trim())"
     }
     if (-not $r.Out.Trim()) { return $null }
@@ -88,11 +109,16 @@ function Invoke-AzRead {
     $value
 }
 
-# A read whose output holds a secret: the text, which the caller keeps in a variable and writes only to a file.
+# A read whose output holds a secret: the text, which the caller keeps in a variable and writes only to a file. With
+# -AllowMissing, a resource or secret that does not exist is $null; any other failure, such as a service that is
+# unavailable, still stops the caller, so a secret is never replaced because a read failed.
 function Invoke-AzSecretRead {
-    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Arguments)
+    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Arguments, [switch]$AllowMissing)
     $r = Invoke-AzProcess ($Arguments + @('--output', 'tsv'))
-    if ($r.Code -ne 0) { throw "az $(Format-AzCommand $Arguments) failed ($($r.Code)): $($r.Err.Trim())" }
+    if ($r.Code -ne 0) {
+        if ($AllowMissing -and ($r.Err -match $script:NotFound -or $r.Err -match $script:SecretNotFound)) { return $null }
+        throw "az $(Format-AzCommand $Arguments) failed ($($r.Code)): $($r.Err.Trim())"
+    }
     $r.Out.Trim()
 }
 
@@ -116,5 +142,11 @@ function Invoke-AzChange {
 # Reports a resource the step found and left alone, so a re-run shows what it did not change.
 function Write-AzFound([string]$What) { Write-Host "  FOUND $What" }
 
+# A property of an Azure CLI answer, or $null when the answer or the property is missing (strict mode refuses to read a
+# property an object does not have).
+function Get-AzValue($object, [string]$Name) {
+    if ($null -ne $object -and $object.PSObject.Properties[$Name]) { $object.PSObject.Properties[$Name].Value } else { $null }
+}
+
 Export-ModuleMember -Function Initialize-AzRunner, Test-AzPlan, Set-AzPlan, Get-AzPlanned, New-AzSecretArgument, Get-AzWorkFile, Clear-AzSecrets,
-    Invoke-AzRead, Invoke-AzSecretRead, Invoke-AzChange, Write-AzFound, Format-AzCommand
+    Invoke-AzRead, Invoke-AzSecretRead, Invoke-AzChange, Invoke-AzSession, Write-AzFound, Format-AzCommand, Get-AzValue

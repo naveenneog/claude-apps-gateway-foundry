@@ -22,7 +22,7 @@ Defaults and repository inputs were checked on September 29, 2026; they are not 
 | Sign-in starts, per client address | 30 per 600 seconds | `rate_limits.device_authorization`: 1,000 per 600 seconds | [HTTP tuning](https://code.claude.com/docs/en/claude-apps-gateway-config#http-tuning); config/gateway.azure-private.yaml:72 |
 | Code submissions, per client address | 10 per 600 seconds | `rate_limits.device_verify`: 100 per 600 seconds | [HTTP tuning](https://code.claude.com/docs/en/claude-apps-gateway-config#http-tuning); config/gateway.azure-private.yaml:73 |
 | Concurrent upstream requests, per replica | 256 | `-MaxUpstreamRequests` sets `BUN_CONFIG_MAX_HTTP_REQUESTS` | [Upstream concurrency](https://code.claude.com/docs/en/claude-apps-gateway-deploy#concurrent-upstream-requests); infra/azure-private/lib/AppDefinition.psm1:25 |
-| HTTP scale-out target | 10 concurrent requests | `-ConcurrentRequests`: 150 | [HTTP scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app#http); infra/azure-private/Deploy-Gateway.ps1:42 |
+| HTTP scale-out target | 10 concurrent requests | `-ConcurrentRequests`: 150 | [HTTP scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app#http); infra/azure-private/Deploy-Gateway.ps1:45 |
 | PostgreSQL pool, per replica | 5 connections | `store.max_connections`: 5 | [Store](https://code.claude.com/docs/en/claude-apps-gateway-config#store); config/gateway.azure-private.yaml:33 |
 | Readiness grace after a store outage | 0 seconds | `store.readiness_grace_seconds`: 300 | [Store](https://code.claude.com/docs/en/claude-apps-gateway-config#store); config/gateway.azure-private.yaml:35 |
 | Gateway session lifetime | 1 hour | `session.ttl_hours`: 1 | [Session](https://code.claude.com/docs/en/claude-apps-gateway-config#session); config/gateway.azure-private.yaml:27 |
@@ -71,7 +71,7 @@ Estimate the busiest sustained interval, then test bursts. Count model requests,
 | Requests per active developer | 2 per minute | Model request count divided by active developers and interval duration |
 | Average time a request stays open | 30 seconds | Time from request start to stream end in the client/load generator |
 
-Audit fields are recorded in docs/UNKNOWNS.md:55; the target is 150, below 256 upstream slots (infra/azure-private/Deploy-Gateway.ps1:42-43).
+Audit fields are recorded in docs/UNKNOWNS.md:55; the target is 150, below 256 upstream slots (infra/azure-private/Deploy-Gateway.ps1:45-46).
 
 ```text
 request rate = 25,000 × 20% × 2 = 10,000 requests/minute
@@ -88,7 +88,7 @@ A stream occupies an upstream slot until it ends; queued bodies also consume mem
 `BUN_CONFIG_MAX_HTTP_REQUESTS` (1–65,535). Measure CPU/memory before raising it, and keep the HTTP target below it
 ([upstream concurrency](https://code.claude.com/docs/en/claude-apps-gateway-deploy#concurrent-upstream-requests)).
 
-CPU/memory capacity remains unmeasured (U-58, docs/UNKNOWNS.md:69). `-Cpu`/`-Memory` request 1 vCPU/2 GiB (infra/azure-private/Deploy-Gateway.ps1:44-45).
+CPU/memory capacity remains unmeasured (U-58, docs/UNKNOWNS.md:69). `-Cpu`/`-Memory` request 1 vCPU/2 GiB (infra/azure-private/Deploy-Gateway.ps1:47-48).
 Use [`load_test_mode`](https://code.claude.com/docs/en/claude-apps-gateway-config#load_test_mode) on an isolated deployment with its own empty database,
 never a gateway developers use. It returns canned replies without Foundry; `x-load-test-user` simulates distinct users.
 The mode needs gateway 2.1.282+; CPU estimates before 2.1.283 are substantially lower. Even newer estimates omit upstream encryption.
@@ -117,7 +117,7 @@ Retest long streams on the private deployment, including scale-in and upgrades.
 
 ## PostgreSQL
 
-Budget for the old and new revisions of a rollout, which hold connections at the same time: `2 × replicas × store.max_connections + other connections ≤ max_connections − reserved connections`. On 2026-09-29 a rollout of 2 replicas at 10 connections each, next to the old revision's 2, logged `remaining connection slots are reserved for roles with the SUPERUSER attribute` on Burstable B1ms (tests/azure-private.test.mjs:135-138).
+Budget for the old and new revisions of a rollout, which hold connections at the same time: `2 × replicas × store.max_connections + other connections ≤ max_connections − reserved connections`. On 2026-09-29 a rollout of 2 replicas at 10 connections each, next to the old revision's 2, logged `remaining connection slots are reserved for roles with the SUPERUSER attribute` on Burstable B1ms (tests/azure-private.test.mjs:148-151).
 Pools are [per replica, not per developer](https://code.claude.com/docs/en/claude-apps-gateway-config#store).
 Azure currently reserves 15 connections. Read `max_connections`, `reserved_connections` and `superuser_reserved_connections`;
 defaults do not automatically increase after a SKU change ([PostgreSQL limits](https://learn.microsoft.com/en-us/azure/postgresql/configure-maintain/concepts-limits)).
@@ -134,8 +134,8 @@ defaults do not automatically increase after a SKU change ([PostgreSQL limits](h
 The example's `2 × 34 × 10 = 680` connections, a rollout of 34 replicas at 10 connections each, fit D2ds_v5's 844 before other clients, but do not establish CPU/I/O capacity.
 Set the pool through `deployment.storeConnectionsPerReplica` (config/gateway-admin.azure-private.json:40).
 
-The B1ms test ceiling is `-MaxReplicas 3` with 5 connections per replica: `2 × 3 × 5 = 30` of 35 maximum user connections (infra/azure-private/Deploy-Gateway.ps1:38-41).
-A test checks this default budget (tests/azure-private.test.mjs:132-142). Production guidance is General Purpose with zone-redundant HA
+The B1ms test ceiling is `-MaxReplicas 3` with 5 connections per replica: `2 × 3 × 5 = 30` of 35 maximum user connections (infra/azure-private/Deploy-Gateway.ps1:41-44).
+A test checks this default budget (tests/azure-private.test.mjs:145-155). Production guidance is General Purpose with zone-redundant HA
 (docs/adr/0005-network-restricted-deployment.md:69; [HA support](https://learn.microsoft.com/en-us/azure/postgresql/high-availability/concepts-high-availability)).
 `-PostgresSku`, `-PostgresTier` and `-PostgresZonalResiliency` apply to new servers, not upgrades (infra/azure-private/lib/Steps.Base.psm1:92-100).
 
@@ -233,7 +233,7 @@ config/gateway-admin.azure-private.json:35-37). Developer subnets are never trus
 Bind a custom domain to a TLS certificate issued by the organization's CA ([Container Apps certificates](https://learn.microsoft.com/en-us/azure/container-apps/custom-domains-certificates));
 install the CA trust chain on clients. The change to the custom origin also sets `GATEWAY_PUBLIC_URL` and the Entra
 redirect URI `<origin>/oauth/callback` to it; `Deploy-Gateway.ps1` derives both from the default host name
-(infra/azure-private/lib/AppDefinition.psm1:16; infra/azure-private/lib/Steps.App.psm1:44).
+(infra/azure-private/lib/AppDefinition.psm1:16; infra/azure-private/lib/Steps.App.psm1:57).
 The CLI pins the leaf certificate per hostname. Publish its SHA-256 fingerprint
 and plan rotations: each prompts developers again. Put the hostname in `NO_PROXY` to avoid proxy bypass of pin checks
 ([connect developers](https://code.claude.com/docs/en/claude-apps-gateway#connect-developers)).

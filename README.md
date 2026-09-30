@@ -25,18 +25,19 @@ deployment (ADR-0003). The network-restricted example deployment keeps its gener
 | [docs/adr/0003-azure-test-deployment-with-restricted-ingress.md](docs/adr/0003-azure-test-deployment-with-restricted-ingress.md) | M1 test topology: Container Apps, PostgreSQL sidecar, allow lists on the tester's range, admission by app role, what stays untested |
 | [docs/learn/](docs/learn/overview.md) | Microsoft Learn articles: overview, developer quickstart, network-restricted deployment tutorial, client connection how-to, capacity plan for 25,000 developers, admin how-to, inference tests how-to, script reference, troubleshooting, `toc.yml` |
 | [docs/export/](docs/export) | PDF and Word copies of the network-restricted deployment tutorial, the client connection how-to and the capacity plan, for readers without the repository |
-| [infra/azure-private/](infra/azure-private) | Network-restricted deployment (ADR-0005): `Deploy-Gateway.ps1` and its step modules |
+| [infra/azure-private/](infra/azure-private) | Network-restricted deployment (ADR-0005): `Deploy-Gateway.ps1` and its step modules, telemetry included (ADR-0007) |
 | [docs/adr/0004-operator-and-developer-tooling.md](docs/adr/0004-operator-and-developer-tooling.md) | Admin and developer tooling: the `apiKeyHelper` developer profile, DPAPI session, admin scripts, and the council's amendments |
 | [scripts/developer/](scripts/developer) | Windows PowerShell 5.1 scripts: `Install-ClaudeGatewayProfile.ps1`, `Connect-ClaudeGateway.ps1`, `Get-ClaudeGatewayToken.ps1`, `Disconnect-ClaudeGateway.ps1` |
 | [scripts/admin/](scripts/admin) | Node.js scripts: `new-gateway-config.mjs`, `set-developer.mjs`, `new-client-policy.mjs` |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Routes A, A2, B, C and D; draft `gateway.yaml`; client managed settings; controls on route C's APIM API |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Milestones M0–M5 and packets P-0–P-31 with acceptance criteria |
-| [docs/TEST-PLAN.md](docs/TEST-PLAN.md) | Test cases T-01–T-76 with negative checks, parity scenarios PS-1–PS-11, and results |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Milestones M0–M5 and packets P-0–P-32 with acceptance criteria |
+| [docs/TEST-PLAN.md](docs/TEST-PLAN.md) | Test cases T-01–T-79 with negative checks, parity scenarios PS-1–PS-11, and results |
 | [docs/UNKNOWNS.md](docs/UNKNOWNS.md) | Known unknowns, their state and evidence |
 | [docs/STATUS.md](docs/STATUS.md) | Active packet and handover notes |
 | [docs/CHARTER.md](docs/CHARTER.md) | Goals, non-goals, constraints, definition of done |
 | [infra/azure-test/](infra/azure-test) | Test deployment on Azure Container Apps (ADR-0003): `deploy.mjs`, `teardown.mjs`, ARM template `gateway-test.json`, Entra app manifest, image files (`Dockerfile`, `verify-release.sh`, entrypoint) |
 | [config/gateway.azure-test.yaml](config/gateway.azure-test.yaml) | Gateway config for the test deployment; every secret and environment value is a `${VAR}` reference |
+| [config/otel-collector.azure-private.json](config/otel-collector.azure-private.json) | OpenTelemetry Collector config of the network-restricted deployment: one metrics pipeline from the gateway's loopback to Application Insights (ADR-0007) |
 | [tests/live/](tests/live) | Live checks against the deployed gateway, and `inference-suite.mjs` (T-51, T-55 to T-65); results in `docs/TEST-PLAN.md` |
 | [scripts/publish/](scripts/publish) | `check-public.mjs`, the check a tree passes before it is published, and `allow.json`, the values it accepts with a reason each (ADR-0006) |
 

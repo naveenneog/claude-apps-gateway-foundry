@@ -37,6 +37,19 @@ function Step-Environment($c) {
     else { Invoke-AzChange @('network', 'private-dns', 'record-set', 'a', 'add-record', '-g', $rg, '-z', $c.DefaultDomain, '-n', '*', '-a', $c.StaticIp) | Out-Null }
 }
 
+# The app role assignments of a service principal, from every page of Graph's appRoleAssignedTo. A page that is missing,
+# fails or holds no list stops the step, so a partial list never counts as the complete one (council round 2).
+function Get-AppRoleAssignment([string]$SpId) {
+    $url = "https://graph.microsoft.com/v1.0/servicePrincipals/$SpId/appRoleAssignedTo"
+    while ($url) {
+        $page = Invoke-AzRead @('rest', '--method', 'GET', '--url', $url) -Required
+        $list = if ($null -ne $page) { $page.PSObject.Properties['value'] } else { $null }
+        if (-not $list -or $list.Value -isnot [array]) { throw "The role holders of service principal $SpId were not read: a page of $url holds no list of assignments." }
+        $list.Value
+        $url = Get-AzValue $page '@odata.nextLink'
+    }
+}
+
 # The app registration: redirect URI on the gateway's host, app roles, the email claim and v2 tokens
 # (https://code.claude.com/docs/en/claude-apps-gateway-deploy#identity-provider-setup); the operator holds one role.
 function Step-Entra($c) {
@@ -58,11 +71,16 @@ function Step-Entra($c) {
     $c.AppId = if ($app) { $app.appId } else { "<application ID of $($c.AppRegistration)>" }
     if (-not $app -or $app.api.requestedAccessTokenVersion -ne 2) { Invoke-AzChange @('ad', 'app', 'update', '--id', $c.AppId, '--set', 'api.requestedAccessTokenVersion=2') | Out-Null }
     $sp = if ($app) { Invoke-AzRead @('ad', 'sp', 'show', '--id', $c.AppId) } else { $null }
+    $spExisted = [bool]$sp
     if ($sp) { Write-AzFound "service principal $($sp.id)" } else { $sp = Invoke-AzChange @('ad', 'sp', 'create', '--id', $c.AppId) }
     $spId = if ($sp) { $sp.id } else { '<service principal ID>' }
     $me = Invoke-AzRead @('ad', 'signed-in-user', 'show')
     $roleId = ($manifest.appRoles | Where-Object { $_.value -eq $c.OperatorRole }).id
-    $assigned = @($(if ($sp) { (Invoke-AzRead @('rest', '--method', 'GET', '--url', "https://graph.microsoft.com/v1.0/servicePrincipals/$spId/appRoleAssignedTo")).value }) | Where-Object { $_ })
+    # A service principal this run creates has no role holders yet, and Graph can take seconds to know it exists.
+    $assigned = @(if ($spExisted) { Get-AppRoleAssignment $spId })
+    # Every holder of a role, for the operator-only rule while telemetry is on (ADR-0007).
+    $c.OperatorId = $me.id
+    $c.RoleHolders = @($assigned | ForEach-Object { [pscustomobject]@{ Id = $_.principalId; Name = (Get-AzValue $_ 'principalDisplayName'); Type = (Get-AzValue $_ 'principalType') } })
     if (@($assigned | Where-Object { $_.principalId -eq $me.id -and $_.appRoleId -eq $roleId }).Count) { Write-AzFound "$($c.OperatorRole) for $($me.userPrincipalName)"; return }
     $body = Get-AzWorkFile 'role-assignment.json'
     [IO.File]::WriteAllText($body, (ConvertTo-Json @{ principalId = $me.id; resourceId = $spId; appRoleId = $roleId }))
@@ -73,16 +91,39 @@ function Step-Entra($c) {
     }
 }
 
-# The value of a Container App secret, or $null when the app or the secret does not exist.
+# The value of a Container App secret, or $null when the app or the secret does not exist; a read that fails for another
+# reason stops the step.
 function Get-AppSecret($c, [string]$Name) {
-    try { Invoke-AzSecretRead @('containerapp', 'secret', 'show', '-g', $c.ResourceGroup, '-n', $c.App, '--secret-name', $Name, '--query', 'value') } catch { $null }
+    Invoke-AzSecretRead @('containerapp', 'secret', 'show', '-g', $c.ResourceGroup, '-n', $c.App, '--secret-name', $Name, '--query', 'value') -AllowMissing
+}
+
+# The holders of the app registration's roles other than the operator, as "name (type id)", from the entra step; $null
+# when the entra step has not read them.
+function Get-OtherRoleHolders($c) {
+    if (-not $c.ContainsKey('RoleHolders')) { return $null }
+    , @($c.RoleHolders | Where-Object { $_.Id -ne $c.OperatorId } | ForEach-Object { '{0} ({1} {2})' -f $_.Name, $_.Type, $_.Id })
+}
+
+# ADR-0007: the telemetry names each user by email, and every reader of the workspace can read it until P-32 limits who
+# reads it; while telemetry is on, only the operator may hold a role of the app registration.
+function Assert-OnlyOperatorHoldsRoles($c) {
+    if (-not $c.Telemetry) { return }
+    $others = Get-OtherRoleHolders $c
+    if ($null -eq $others) { throw "The holders of the roles of $($c.AppRegistration) were not read; the entra step reads them." }
+    if ($others.Count) {
+        throw ("Only the operator may hold a role of $($c.AppRegistration) while telemetry is on (ADR-0007): the telemetry names each user by email, " +
+            "and every reader of the workspace can read it until P-32. Other holders: $($others -join '; '). Remove their assignments " +
+            "(Microsoft Entra admin center > Enterprise applications > $($c.AppRegistration) > Users and groups), or set deployment.telemetry to false in config/gateway-admin.azure-private.json.")
+    }
 }
 
 function Step-App($c) {
     $rg = $c.ResourceGroup
+    Assert-OnlyOperatorHoldsRoles $c
     if (-not (Test-AzPlan)) {
         # A name an earlier step could not learn is a placeholder such as <default domain>; deploying with it would fail later.
-        $missing = @('Image', 'IdentityClientId', 'AppId', 'DefaultDomain') | Where-Object { [string]$c[$_] -like '<*' }
+        $missing = @('Image', 'IdentityClientId', 'AppId', 'DefaultDomain') + $(if ($c.Telemetry) { @('CollectorImage', 'AppInsightsConnection') } else { @() }) |
+            Where-Object { [string]$c[$_] -like '<*' }
         if ($missing) { throw "The app step needs $($missing -join ', ') from earlier steps; run: pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step all" }
     }
     # The configuration deployed is the checked-in rendering of the admin file, and must be current.
@@ -93,25 +134,38 @@ function Step-App($c) {
     # A secret whose value this run sets reaches an existing app only when its revision restarts (manage-secrets).
     $secretsChanged = [bool]($existing -and (Test-AzPlan) -and $c.RotateClientSecret)
     if (-not (Test-AzPlan)) {
-        $jwt = if ($existing) { Get-AppSecret $c 'jwt-secret' }; if (-not $jwt) { $jwt = New-RandomSecret 48; $secretsChanged = [bool]$existing }
-        $pg = if ($c.Secrets.PgPassword) { $c.Secrets.PgPassword } elseif ($existing) { Get-AppSecret $c 'pg-password' } else { $null }
+        # Every secret the run needs from the app is read before anything changes, so a read that fails stops the step
+        # with Azure unchanged (council round 2).
+        $stored = @{}
+        if ($existing) {
+            $names = @('jwt-secret'; if (-not $c.Secrets.PgPassword) { 'pg-password' }; if (-not $c.RotateClientSecret) { 'oidc-client-secret' }; if ($c.Telemetry) { 'appinsights-connection' })
+            foreach ($name in $names) { $stored[$name] = Get-AppSecret $c $name }
+        }
+        $jwt = $stored['jwt-secret']
+        if (-not $jwt) { $jwt = New-RandomSecret 48; $secretsChanged = [bool]$existing }
+        $pg = if ($c.Secrets.PgPassword) { $c.Secrets.PgPassword } else { $stored['pg-password'] }
         if (-not $pg) {
             # The server exists but its password is not known here: set a new one.
             $pg = New-RandomSecret
             Invoke-AzChange @('postgres', 'flexible-server', 'update', '-g', $rg, '-n', $c.Postgres, '--admin-password', (New-AzSecretArgument 'pg-password' $pg)) | Out-Null
             $secretsChanged = [bool]$existing
         }
-        $oidc = if ($existing -and -not $c.RotateClientSecret) { Get-AppSecret $c 'oidc-client-secret' } else { $null }
+        $oidc = $stored['oidc-client-secret']
         if (-not $oidc) {
             $end = [DateTime]::UtcNow.AddDays($c.ClientSecretDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
             $oidc = Invoke-AzChange @('ad', 'app', 'credential', 'reset', '--id', $c.AppId, '--append', '--display-name', "gateway $([DateTime]::UtcNow.ToString('yyyy-MM-dd'))", '--end-date', $end, '--query', 'password') -Secret
             $secretsChanged = [bool]$existing
         }
+        # The component's connection string is a secret of the app too (ADR-0007).
+        if ($c.Telemetry -and $existing -and $stored['appinsights-connection'] -ne $c.AppInsightsConnection) { $secretsChanged = $true }
     }
     $definition = New-AppDefinition $c
     $json = ConvertTo-Json -InputObject $definition -Depth 20
     $file = Get-AzWorkFile 'containerapp.json'
-    if (-not (Test-AzPlan)) { $json = $json.Replace('__JWT__', $jwt).Replace('__PG__', $pg).Replace('__OIDC__', $oidc) }
+    if (-not (Test-AzPlan)) {
+        $json = $json.Replace('__JWT__', $jwt).Replace('__PG__', $pg).Replace('__OIDC__', $oidc)
+        if ($c.Telemetry) { $json = $json.Replace('__APPINSIGHTS__', $c.AppInsightsConnection) }
+    }
     [IO.File]::WriteAllText($file, $json)
     $verb = if ($existing) { 'update' } else { 'create' }
     Invoke-AzChange @('containerapp', $verb, '-g', $rg, '-n', $c.App, '--yaml', $file) | Out-Null
@@ -134,4 +188,4 @@ function Wait-AppReady($c) {
     }
 }
 
-Export-ModuleMember -Function Step-Environment, Step-Entra, Step-App, Wait-AppReady
+Export-ModuleMember -Function Step-Environment, Step-Entra, Step-App, Wait-AppReady, Get-OtherRoleHolders, Assert-OnlyOperatorHoldsRoles

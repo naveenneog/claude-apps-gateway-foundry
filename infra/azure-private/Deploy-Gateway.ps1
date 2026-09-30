@@ -13,10 +13,15 @@
       registry     container registry and the gateway image, built from the signed Claude Code release
       identity     the gateway's user-assigned identity: AcrPull and Cognitive Services User
       environment  internal Container Apps environment, and the private DNS zone of its default domain
+      telemetry    Application Insights on the environment's workspace, its role for the gateway identity, 30-day
+                   retention, and the OpenTelemetry Collector image at its pinned digest (ADR-0007); off when the admin
+                   file turns it off
       entra        app registration with the gateway's redirect URI and app roles; the operator holds a role
-      app          the gateway Container App with config/gateway.azure-private.yaml
+      app          the gateway Container App with config/gateway.azure-private.yaml; while telemetry is on, only the
+                   operator may hold a role of the app registration (ADR-0007)
       devvm        a Windows 11 VM in the VNet, Azure Bastion Developer, Claude Code, VS Code and the Windows policies
-      verify       name resolution, /readyz and the certificate from the VM; Foundry refuses this machine
+      verify       name resolution, /readyz and the certificate from the VM; Foundry refuses this machine; with
+                   telemetry on, the collector's answers, the metric in AppMetrics and the role holders
 .EXAMPLE
     pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Plan
 .EXAMPLE
@@ -60,7 +65,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-foreach ($m in 'Az', 'Steps.Base', 'AppDefinition', 'Steps.App', 'Steps.Dev') { Import-Module (Join-Path $PSScriptRoot "lib\$m.psm1") -Force -DisableNameChecking }
+foreach ($m in 'Az', 'Steps.Base', 'AppDefinition', 'Steps.App', 'Steps.Telemetry', 'Steps.Dev') { Import-Module (Join-Path $PSScriptRoot "lib\$m.psm1") -Force -DisableNameChecking }
 
 Initialize-AzRunner -Plan:$Plan
 try {
@@ -74,6 +79,8 @@ try {
         $mail = if ($me.mail) { $me.mail } else { $me.userPrincipalName }
         $AllowedEmailDomain = ($mail -split '@')[-1]
     }
+    $adminDeployment = ([IO.File]::ReadAllText((Join-Path $root 'config\gateway-admin.azure-private.json')) | ConvertFrom-Json).deployment
+    $telemetry = [bool]($adminDeployment.PSObject.Properties['telemetry'] -and $adminDeployment.telemetry -eq $true)
     $c = @{
         SubscriptionId = $account.id; TenantId = $account.tenantId; ResourceGroup = $ResourceGroup; Location = $Location; FoundryLocation = $FoundryLocation
         Vnet = 'vnet-claude-gw'; AddressSpace = '10.40.0.0/16'
@@ -96,6 +103,13 @@ try {
         EntraManifest = Join-Path $root 'infra\azure-test\entra-app.json'
         ConfigFile = Join-Path $root 'config\gateway.azure-private.yaml'
         ConfigTool = Join-Path $root 'scripts\admin\new-gateway-config.mjs'
+        # ADR-0007: the admin file turns telemetry on; the collector release is pinned by its manifest list digest.
+        Telemetry = $telemetry
+        AppInsights = 'appi-claude-gw'; CollectorVersion = '0.161.0'
+        CollectorDigest = 'sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1'
+        CollectorConfigFile = Join-Path $root 'config\otel-collector.azure-private.json'
+        # The verify step's wait for its metric in AppMetrics, which took about 2 minutes on 2026-09-30.
+        TelemetryWaitMinutes = 10; TelemetryPollSeconds = 30
         MinReplicas = $MinReplicas; MaxReplicas = $MaxReplicas; ConcurrentRequests = $ConcurrentRequests; MaxUpstreamRequests = $MaxUpstreamRequests
         Cpu = $Cpu; Memory = $Memory; ZoneRedundant = [bool]$ZoneRedundant
         DevVm = 'vm-dev'; DevVmUser = 'devadmin'; DevVmSize = 'Standard_D4s_v5'; DevVmImage = 'MicrosoftWindowsDesktop:windows-11:win11-25h2-ent:latest'
@@ -108,13 +122,14 @@ try {
         [Console]::Out.WriteLine("$($c.DevVmUser) $saved")
         return
     }
-    $order = 'network', 'dns', 'foundry', 'postgres', 'registry', 'identity', 'environment', 'entra', 'app', 'devvm', 'verify'
+    $order = 'network', 'dns', 'foundry', 'postgres', 'registry', 'identity', 'environment', 'telemetry', 'entra', 'app', 'devvm', 'verify'
     $Step = @($Step | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $unknown = @($Step | Where-Object { $_ -ne 'all' -and $order -notcontains $_ })
     if ($unknown.Count) { throw "Unknown step $($unknown -join ', '); the steps are all, $($order -join ', ')." }
     $selected = if ($Step -contains 'all') { $order } else { $order | Where-Object { $Step -contains $_ } }
-    # Later steps need names that earlier steps learn: the image, the identity, the environment's domain, the app ID.
-    $needs = @{ app = @('registry', 'identity', 'environment', 'entra'); entra = @('environment'); devvm = @('environment'); verify = @('environment') }
+    # Later steps need names that earlier steps learn: the image, the identity, the environment's domain, the app ID,
+    # the workspace, the component's connection string and the collector image, and the holders of the app's roles.
+    $needs = @{ app = @('registry', 'identity', 'environment', 'telemetry', 'entra'); telemetry = @('registry', 'identity', 'environment'); entra = @('environment'); devvm = @('environment'); verify = @('environment', 'entra') }
     $quiet = @($selected | ForEach-Object { $needs[$_] } | Where-Object { $_ -and $selected -notcontains $_ } | Select-Object -Unique)
     foreach ($s in $order) {
         if ($selected -notcontains $s -and $quiet -notcontains $s) { continue }

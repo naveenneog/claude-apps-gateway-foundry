@@ -51,17 +51,24 @@ models:
 
 # One policy per app role, in the admin file's order; the first match applies, and its availableModels list is
 # enforced at /v1/messages. Every admitted role has a policy (T-52). desktop: {} opts the policy in to Claude Desktop.
+# Client metrics carry neither a session nor an account ID, so a series is per user and model (ADR-0007).
 managed:
   policies:
     - match: { groups: [Gateway.Premium] }
       cli:
         availableModels: [claude-opus-5, claude-sonnet-5]
         enforceAvailableModels: true
+        env:
+          OTEL_METRICS_INCLUDE_SESSION_ID: "false"
+          OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false"
       desktop: {}
     - match: { groups: [Gateway.Standard] }
       cli:
         availableModels: [claude-sonnet-5]
         enforceAvailableModels: true
+        env:
+          OTEL_METRICS_INCLUDE_SESSION_ID: "false"
+          OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false"
       desktop: {}
 
 access_control:
@@ -71,3 +78,13 @@ access_control:
 rate_limits:
   device_authorization: { max: 1000, window_seconds: 600 }
   device_verify: { max: 100, window_seconds: 600 }
+
+# Client metrics go to the OpenTelemetry Collector sidecar on the gateway's loopback, which exports them to
+# Application Insights; logs and traces stay off (ADR-0002, ADR-0007). CLAUDE_GATEWAY_ALLOW_LOOPBACK=1 is set on
+# the gateway container, since the gateway refuses a loopback destination without it.
+telemetry:
+  forward_to:
+    - url: http://localhost:4318
+      metrics: true
+      logs: false
+      traces: false

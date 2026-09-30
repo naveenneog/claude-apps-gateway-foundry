@@ -1,6 +1,7 @@
 # The Container App definition of the gateway for `az containerapp create|update --yaml` (ADR-0005). JSON is YAML, so
-# the file is written with ConvertTo-Json. Secret values are placeholders here, __JWT__, __PG__ and __OIDC__; Step-App
-# replaces them in the text it writes to a file, so no secret passes through a cmdlet.
+# the file is written with ConvertTo-Json. Secret values are placeholders here, __JWT__, __PG__, __OIDC__ and
+# __APPINSIGHTS__; Step-App replaces them in the text it writes to a file, so no secret passes through a cmdlet. With
+# telemetry on, an OpenTelemetry Collector sidecar shares the gateway's loopback (ADR-0007).
 Set-StrictMode -Version Latest
 
 function New-AppDefinition($c) {
@@ -31,6 +32,35 @@ function New-AppDefinition($c) {
         GATEWAY_CONFIG_SHA256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($c.ConfigFile))).ToLowerInvariant()
     }
     $env = @($plainEnv.GetEnumerator() | ForEach-Object { @{ name = $_.Key; value = [string]$_.Value } }) + $secretEnv
+    $secrets = @(
+        @{ name = 'gateway-config'; value = [IO.File]::ReadAllText($c.ConfigFile) },
+        @{ name = 'oidc-client-secret'; value = '__OIDC__' },
+        @{ name = 'jwt-secret'; value = '__JWT__' },
+        @{ name = 'pg-password'; value = '__PG__' }
+    )
+    $volumes = @(@{ name = 'gateway-config'; storageType = 'Secret'; secrets = @(@{ secretRef = 'gateway-config'; path = 'gateway.yaml' }) })
+    $sidecars = @()
+    if ($c.Telemetry) {
+        # ADR-0007: the gateway sends client metrics to the collector on the shared loopback, which it refuses without this.
+        $env += @{ name = 'CLAUDE_GATEWAY_ALLOW_LOOPBACK'; value = '1' }
+        $collectorConfig = [IO.File]::ReadAllText($c.CollectorConfigFile)
+        # The connection string is replaced like the other placeholders, so the definition printed by -Plan holds none.
+        $secrets += @(@{ name = 'otel-config'; value = $collectorConfig }, @{ name = 'appinsights-connection'; value = '__APPINSIGHTS__' })
+        $volumes += @{ name = 'otel-config'; storageType = 'Secret'; secrets = @(@{ secretRef = 'otel-config'; path = 'config.yaml' }) }
+        $sidecars += [ordered]@{
+            name = 'otel-collector'
+            image = $c.CollectorImage
+            args = @('--config=/etc/otelcol/config.yaml')
+            resources = @{ cpu = 0.25; memory = '0.5Gi' }
+            env = @(
+                @{ name = 'AZURE_CLIENT_ID'; value = $c.IdentityClientId },
+                @{ name = 'APPLICATIONINSIGHTS_CONNECTION_STRING'; secretRef = 'appinsights-connection' },
+                # As for the gateway's configuration: a changed secret reaches no running revision, a changed hash does.
+                @{ name = 'OTEL_CONFIG_SHA256'; value = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([IO.File]::ReadAllBytes($c.CollectorConfigFile))).ToLowerInvariant() }
+            )
+            volumeMounts = @(@{ volumeName = 'otel-config'; mountPath = '/etc/otelcol' })
+        }
+    }
     $probe = {
         param($type, $path, $extra)
         $p = [ordered]@{ type = $type; httpGet = @{ path = $path; port = 8080 }; periodSeconds = 10; timeoutSeconds = 3; failureThreshold = 3 }
@@ -48,12 +78,7 @@ function New-AppDefinition($c) {
                 # In an internal environment, external ingress is reachable from the VNet only.
                 ingress = [ordered]@{ external = $true; targetPort = 8080; transport = 'http'; allowInsecure = $false }
                 registries = @(@{ server = "$($c.Acr).azurecr.io"; identity = $c.IdentityId })
-                secrets = @(
-                    @{ name = 'gateway-config'; value = [IO.File]::ReadAllText($c.ConfigFile) },
-                    @{ name = 'oidc-client-secret'; value = '__OIDC__' },
-                    @{ name = 'jwt-secret'; value = '__JWT__' },
-                    @{ name = 'pg-password'; value = '__PG__' }
-                )
+                secrets = $secrets
             }
             template = [ordered]@{
                 terminationGracePeriodSeconds = 130
@@ -71,8 +96,8 @@ function New-AppDefinition($c) {
                         (& $probe 'Readiness' '/readyz' @{})
                     )
                     volumeMounts = @(@{ volumeName = 'gateway-config'; mountPath = '/etc/claude' })
-                })
-                volumes = @(@{ name = 'gateway-config'; storageType = 'Secret'; secrets = @(@{ secretRef = 'gateway-config'; path = 'gateway.yaml' }) })
+                }) + $sidecars
+                volumes = $volumes
                 scale = [ordered]@{
                     minReplicas = $c.MinReplicas
                     maxReplicas = $c.MaxReplicas

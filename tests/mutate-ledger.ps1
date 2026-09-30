@@ -112,7 +112,7 @@ $rx = @(
   @('docs/learn/troubleshoot.md', 'the Discovery row deleted', '\| `Discovery at <url> returned HTTP <status>\.` \|[^\n]*\n', ''),
   @('docs/learn/troubleshoot.md', 'the row of the local sign-in deadline deleted', '\| `The sign-in code expired before it was confirmed \(expired_token\)\.` \| The script stopped polling[^\n]*\n', ''),
   @($R, 'tables read fenced code', 'const lines = withoutFences\(markdown\);(\r?\n\s*)return tableSpans', 'const lines = markdown.split(/\r?\n/);${1}return tableSpans'),
-  @($ADR, 'ADR row loses its evidence', '\| C:\\[^|]*policy\.xml:82-124 ; https://code\.claude\.com/docs/en/claude-apps-gateway-config#http-tuning \|', '| see the policy file |'),
+  @($ADR, 'ADR row loses its evidence', '\| \[claude-code-foundry-gateway@f237fb9:infra/policy\.xml:82-124\]\([^)]*\) ; https://code\.claude\.com/docs/en/claude-apps-gateway-config#http-tuning \|', '| see the policy file |'),
   @($ADR, 'blank line splits the comparison table', '(\r?\n)(\| Revocation \|)', '${1}${1}${2}'),
   @('docs/ARCHITECTURE.md', 'ARCHITECTURE command loses its date', '\| `az apim list`, `az apim show` and `az apim api list`, 2026-09-23 \|', '| `az apim list` |'),
   @('docs/UNKNOWNS.md', 'RESEARCHED U-2 loses its date', '\(checked 2026-09-23\) \|(\r?\n)\| U-3', '(checked recently) |${1}| U-3'),

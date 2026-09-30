@@ -94,7 +94,7 @@ function cidrProblem(value) {
 function deploymentErrors(deployment, policies) {
   if (deployment === null || typeof deployment !== 'object' || Array.isArray(deployment)) return ['deployment: must be an object'];
   const errors = [];
-  const keys = ['developerCidrs', 'signInsPerAddress', 'codeSubmissionsPerAddress', 'storeConnectionsPerReplica', 'desktop'];
+  const keys = ['developerCidrs', 'signInsPerAddress', 'codeSubmissionsPerAddress', 'storeConnectionsPerReplica', 'desktop', 'telemetry'];
   for (const key of Object.keys(deployment)) if (!keys.includes(key)) errors.push(`deployment.${key}: unknown key; the keys are ${keys.join(', ')}`);
   const cidrs = deployment.developerCidrs;
   if (!Array.isArray(cidrs) || !cidrs.length) errors.push('deployment.developerCidrs: list at least one IPv4 block that developers connect from');
@@ -105,6 +105,7 @@ function deploymentErrors(deployment, policies) {
   }
   if (deployment.desktop !== undefined && typeof deployment.desktop !== 'boolean') errors.push('deployment.desktop: must be true or false');
   if (deployment.desktop === true && !Array.isArray(policies)) errors.push('deployment.desktop: the Claude Desktop opt-in is set on each policy, so list policies');
+  if (deployment.telemetry !== undefined && typeof deployment.telemetry !== 'boolean') errors.push('deployment.telemetry: must be true or false');
   return errors;
 }
 
@@ -118,18 +119,21 @@ export function renderGatewayConfig(admin, { adminFile = 'config/gateway-admin.a
   const deployment = admin.deployment;
   if (topology === 'private' && !deployment) throw new Error('the private topology needs the admin file\'s deployment block, with developerCidrs (ADR-0005)');
   const desktop = topology === 'private' && deployment.desktop === true;
+  const telemetry = topology === 'private' && deployment.telemetry === true;
   const models = admin.models.flatMap((m) => [`  - id: ${scalar(m.id)}`, ...(m.label ? [`    label: ${scalar(m.label)}`] : []),
     `    upstream_model: { foundry: ${scalar(m.deployment)} }`]);
   const managed = admin.policies ? [
     '',
     '# One policy per app role, in the admin file\'s order; the first match applies, and its availableModels list is',
     `# enforced at /v1/messages. Every admitted role has a policy (T-52).${desktop ? ' desktop: {} opts the policy in to Claude Desktop.' : ''}`,
+    ...(telemetry ? ['# Client metrics carry neither a session nor an account ID, so a series is per user and model (ADR-0007).'] : []),
     'managed:',
     '  policies:',
     ...admin.policies.flatMap((p) => [`    - match: { groups: [${scalar(p.role)}] }`, '      cli:', `        availableModels: ${flow(p.models)}`,
       // The Default model option resolves inside availableModels, instead of a model the policy leaves out, which the
       // gateway refuses with 400 (https://code.claude.com/docs/en/claude-apps-gateway#whats-enforced-on-developers).
       '        enforceAvailableModels: true',
+      ...(telemetry ? ['        env:', '          OTEL_METRICS_INCLUDE_SESSION_ID: "false"', '          OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false"'] : []),
       ...(desktop ? ['      desktop: {}'] : [])]),
   ] : [];
   const oidc = [
@@ -202,6 +206,20 @@ function renderPrivate(admin, adminFile, oidc, upstreamAndModels) {
     ...(d.signInsPerAddress ? [`  device_authorization: { max: ${d.signInsPerAddress}, window_seconds: 600 }`] : []),
     ...(d.codeSubmissionsPerAddress ? [`  device_verify: { max: ${d.codeSubmissionsPerAddress}, window_seconds: 600 }`] : []),
   ] : [];
+  // ADR-0007: the OpenTelemetry Collector sidecar shares the gateway's loopback and exports to Application Insights;
+  // metrics only (ADR-0002). Deploy-Gateway.ps1 sets CLAUDE_GATEWAY_ALLOW_LOOPBACK=1, which a loopback destination needs.
+  const telemetry = d.telemetry === true ? [
+    '',
+    '# Client metrics go to the OpenTelemetry Collector sidecar on the gateway\'s loopback, which exports them to',
+    '# Application Insights; logs and traces stay off (ADR-0002, ADR-0007). CLAUDE_GATEWAY_ALLOW_LOOPBACK=1 is set on',
+    '# the gateway container, since the gateway refuses a loopback destination without it.',
+    'telemetry:',
+    '  forward_to:',
+    '    - url: http://localhost:4318',
+    '      metrics: true',
+    '      logs: false',
+    '      traces: false',
+  ] : [];
   return [
     '# Claude apps gateway: network-restricted deployment on Azure Container Apps (ADR-0005).',
     `# Generated from ${adminFile} by the admin script new-gateway-config.mjs --topology private (ADR-0004).`,
@@ -231,6 +249,7 @@ function renderPrivate(admin, adminFile, oidc, upstreamAndModels) {
     'access_control:',
     `  allow_cidrs: [${d.developerCidrs.join(', ')}]`,
     ...rateLimits,
+    ...telemetry,
     '',
   ].join('\n');
 }

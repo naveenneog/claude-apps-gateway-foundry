@@ -15,7 +15,7 @@ A custom domain replaces the default host name in four places: a private DNS rec
 Container App ([custom domains and certificates](https://learn.microsoft.com/en-us/azure/container-apps/custom-domains-certificates)),
 `GATEWAY_PUBLIC_URL`, which is the gateway's `listen.public_url`, and the Entra redirect URI `<origin>/oauth/callback`.
 `Deploy-Gateway.ps1` sets the last two from the default host name (infra/azure-private/lib/AppDefinition.psm1:16;
-infra/azure-private/lib/Steps.App.psm1:44). Until that change, the client values use
+infra/azure-private/lib/Steps.App.psm1:57). Until that change, the client values use
 `https://ca-claude-gw.<environment default domain>`.
 
 | Client | Machine setting | Sign-in | Minimum version | Source |
@@ -33,11 +33,17 @@ infra/azure-private/lib/Steps.App.psm1:44). Until that change, the client values
 - Have Node.js 22 or later for the generator (docs/learn/reference-scripts.md:13), and administrator rights or device management for HKLM ([delivery mechanisms](https://code.claude.com/docs/en/managed-settings#choose-a-delivery-mechanism)).
 - Assign a user, or groups for the 25,000-developer rollout, to `Gateway.Standard` or `Gateway.Premium` on the gateway's
   enterprise application (config/gateway.azure-private.yaml:22-23). This deployment names its app registration
-  `claude-apps-gateway-private-<suffix>` (infra/azure-private/Deploy-Gateway.ps1:84).
+  `claude-apps-gateway-private-<suffix>` (infra/azure-private/Deploy-Gateway.ps1:87).
   In the Microsoft Entra admin center, open **Enterprise applications**, select that gateway application, then
   **Users and groups > Add user/group**. Select the user or group, choose **Select a role**, select the gateway role,
   and select **Assign**. Group-based assignment requires **Microsoft Entra ID P1 or P2**; nested group memberships
   do not grant access through the assignment ([assign users, groups and roles](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
+- While `deployment.telemetry` is `true` in `config/gateway-admin.azure-private.json`, the telemetry names each user by
+  email and every reader of the workspace can read it, until P-32 limits reading to a named group (ADR-0007). In that
+  state the deployment's app step stops when anyone but the operator holds a role of the app registration, and the
+  verify step reports every other holder (infra/azure-private/lib/Steps.App.psm1:107-118;
+  infra/azure-private/lib/Steps.Telemetry.psm1:185). Onboarding a second user
+  therefore waits for P-32, or runs with `deployment.telemetry` set to `false`.
 
 ## Network requirements for developer machines
 

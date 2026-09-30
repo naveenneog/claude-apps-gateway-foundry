@@ -6,6 +6,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 ## [Unreleased]
 
 ### Added
+- Telemetry for the network-restricted deployment (P-9, ADR-0007). With `deployment.telemetry` in the admin file, the gateway
+  sends client metrics, and no logs or traces, to an OpenTelemetry Collector sidecar on its loopback, which exports them
+  to Application Insights with the gateway's managed identity; each policy keeps session and account IDs out of the
+  metrics. `Deploy-Gateway.ps1 -Step telemetry` makes the component with local authentication off, gives the identity
+  Monitoring Metrics Publisher, sets every table of the workspace but `Usage` and `AzureActivity` to 30 days, and
+  imports the collector by digest; `-Step verify` posts a metric, a log record and a trace record to the collector and
+  finds the metric in `AppMetrics` (T-78, T-32).
+- Telemetry checks from P-9's council round 1 (ADR-0007). The telemetry step stops before any change when the
+  collector's tag in the registry is at another digest than the pinned one, naming both digests and the `az acr
+  repository untag` command, and reads the digest again after an import; it sets the workspace's own retention to 30
+  days along with its purge and permission settings. While telemetry is on, the app step refuses to deploy when anyone
+  but the operator holds a role of the app registration, since every reader of the workspace can read the telemetry's
+  emails until P-32; the entra step reads the holders from every page and stops when a page is missing, fails or holds
+  no list. The app step restarts the latest revision when the component's connection string changed. `-Step
+  verify` reads the role holders, reports a missing collector answer with the exec exit code and error line, and
+  passes T-32 only on 404.
 - A public copy of the repository (P-31, ADR-0006). `scripts/publish/check-public.mjs` checks a tree before it is
   published: user profile paths, public IPv4 addresses, Container Apps host names and e-mail addresses by pattern, and
   the words of a deny file kept outside the repository, in text and UTF-16 files, Word parts and paragraphs, the
@@ -20,6 +36,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
   (T-76). The repository is MIT-licensed (`LICENSE`).
 
 ### Changed
+- The working repository is `naveenneog/claude-apps-gateway-foundry-private`. `naveenneog/claude-apps-gateway-foundry`
+  is public under the MIT license and holds revision `5bed341` as commit `86e3cbe` (P-31, T-76).
 - Citations of local copies of other repositories link to those repositories on GitHub, at the commit each copy held
   when cited; ADR-0002 and ADR-0004 name the owner as decider.
 - The tester's egress range reads 203.0.113.0/26, an RFC 5737 documentation range, in documents and test fixtures; the
@@ -27,6 +45,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
   198.51.100.10; the tenant's name and the account's billing state are gone from `docs/STATUS.md`.
 - The tutorial's "Get the files" names the public repository, and the PDF and Word copies are rebuilt with it.
 - `.github/workflows/ironclad.yml` runs with a read-only token and pins each action to a commit.
+
+### Fixed
+- `Deploy-Gateway.ps1 -Step app` counted a secret read that failed for any reason as a missing secret. On 2026-09-30 the
+  Container Apps service answered 503 to a read, and the step appended a new client secret to the app registration; the
+  same path could have made a new session-signing secret or a new PostgreSQL password. The step now reads every secret it
+  needs before it changes anything, makes a secret anew only when the app does not have it, and stops before any change
+  when a read fails for another reason.
 
 ### Added
 - The mutation checks run on GitHub (P-26): `.github/workflows/mutation.yml`, started by hand, runs the four

@@ -131,6 +131,7 @@ function Step-Identity($c) {
     else { $identity = Invoke-AzChange @('identity', 'create', '-g', $rg, '-n', $c.Identity, '--location', $c.Location) }
     $c.IdentityId = "/subscriptions/$($c.SubscriptionId)/resourceGroups/$rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/$($c.Identity)"
     $principal = if ($identity) { $identity.principalId } else { "<principal ID of $($c.Identity)>" }
+    $c.IdentityPrincipalId = $principal
     $c.IdentityClientId = if ($identity) { $identity.clientId } else { "<client ID of $($c.Identity)>" }
     $scopes = @(
         @{ Role = 'AcrPull'; Scope = "/subscriptions/$($c.SubscriptionId)/resourceGroups/$rg/providers/Microsoft.ContainerRegistry/registries/$($c.Acr)" },

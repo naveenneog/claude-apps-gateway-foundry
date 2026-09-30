@@ -23,7 +23,7 @@ Each step is shown three ways:
 |---|---|
 | Azure portal | The portal path, the settings, and a screenshot of the resource this tutorial deployed on 2026-09-29 |
 | Azure CLI | The `az` commands, in PowerShell 7 |
-| Script | The step of `infra/azure-private/Deploy-Gateway.ps1`, which runs the same `az` commands (infra/azure-private/Deploy-Gateway.ps1:5-20) |
+| Script | The step of `infra/azure-private/Deploy-Gateway.ps1`, which runs the same `az` commands (infra/azure-private/Deploy-Gateway.ps1:5-24) |
 
 The script reuses existing resources and may reconcile their settings, and `-Plan` prints the commands it would run
 without changing anything (docs/adr/0005-network-restricted-deployment.md:56-60).
@@ -58,7 +58,7 @@ Code accepts only a gateway whose host name resolves to private addresses
 | App registration | `claude-apps-gateway-private-<suffix>` | The OpenID Connect client, with app roles `Gateway.Standard` and `Gateway.Premium` |
 | Test machine (optional) | `vm-dev`, `bas-claude-gw`, `ng-dev` | A Windows 11 VM reached through Azure Bastion Developer, standing in for a developer machine on the corporate network |
 
-The names come from the script (infra/azure-private/Deploy-Gateway.ps1:79-104). The test deployment runs in North
+The names come from the script (infra/azure-private/Deploy-Gateway.ps1:82-107). The test deployment runs in North
 Central US, with the Foundry account in East US 2, where the subscription holds Claude quota (docs/UNKNOWNS.md:74).
 Production differences, such as a hub-and-spoke network and a custom domain, are in ADR-0005
 (docs/adr/0005-network-restricted-deployment.md:64-73), and sizing for 25,000 developers is in
@@ -74,7 +74,7 @@ Production differences, such as a hub-and-spoke network and a custom domain, are
 | Claude terms | The organization's legal name, two-letter country code and industry, which each Claude deployment records to accept the Azure Marketplace offer | https://learn.microsoft.com/en-us/azure/developer/ai/how-to/deploy-claude-foundry#terms-of-use |
 | One region for the regional resources | Capacity for a new Container Apps environment, PostgreSQL flexible server and, for the test machine, Bastion Developer | docs/UNKNOWNS.md:74 |
 | Tools | Azure CLI with the `containerapp` extension, PowerShell 7.2 or later, and Node.js 22 or later for the configuration renderer | infra/azure-private/Deploy-Gateway.ps1:1 |
-| Companion files | The repository `claude-apps-gateway-foundry`: the script in `infra/azure-private`, the gateway configuration in `config`, the image definition in `infra/azure-test/image` and the Entra app manifest `infra/azure-test/entra-app.json`; the commands run from its root | infra/azure-private/Deploy-Gateway.ps1:95-98 |
+| Companion files | The repository `claude-apps-gateway-foundry`: the script in `infra/azure-private`, the gateway configuration in `config`, the image definition in `infra/azure-test/image` and the Entra app manifest `infra/azure-test/entra-app.json`; the commands run from its root | infra/azure-private/Deploy-Gateway.ps1:98-101 |
 | Production network | ExpressRoute or VPN from the corporate network to the virtual network, and DNS that resolves the gateway's zone for developer machines | https://learn.microsoft.com/en-us/azure/dns/dns-private-resolver-overview |
 
 ### Get the files, sign in and set the variables
@@ -126,7 +126,7 @@ if ($LASTEXITCODE -ne 0 -or @((Get-Acl $work).Access).Count -ne 1) { throw "The 
 $work
 ```
 
-The suffix is the one the script derives (infra/azure-private/Deploy-Gateway.ps1:70-71). Each run creates a new
+The suffix is the one the script derives (infra/azure-private/Deploy-Gateway.ps1:73-74). Each run creates a new
 folder, whose name the last line prints; a later PowerShell session sets `$work` to that name again. `icacls` removes
 the inherited permissions and grants the operator's account full control, and a new folder has no other explicit
 entries, so other accounts have none ([icacls](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/icacls)). The commands pass
@@ -287,7 +287,7 @@ az network private-endpoint dns-zone-group add -g $rg --endpoint-name pe-foundry
 ```
 
 The capacity is in the quota units of the model and deployment type; the model versions are the ones this deployment
-used (infra/azure-private/Deploy-Gateway.ps1:87-91).
+used (infra/azure-private/Deploy-Gateway.ps1:90-94).
 
 # [Script](#tab/script)
 
@@ -343,8 +343,9 @@ Step 9 reads `pg-password.txt`.
 pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step postgres -PostgresSku Standard_B1ms -PostgresTier Burstable
 ```
 
-The script keeps the password in memory for the app step and sets a new one when the app step runs alone
-(infra/azure-private/lib/Steps.App.psm1:94-100).
+The script keeps the password in memory for the app step of the same run. An app step that runs alone reads the password
+from the Container App's `pg-password` secret, and sets a new one on the server only when the app does not have that
+secret (infra/azure-private/lib/Steps.App.psm1:139-152).
 
 ---
 
@@ -376,8 +377,8 @@ $image = "$acr.azurecr.io/claude-gateway@" + (az acr repository show -n $acr --i
 ```
 
 `--no-logs` makes the CLI wait for the build and print the run as JSON, whose `status` is `Succeeded` for a good
-build; without it, the CLI prints the build log (tests/azure-private/fake-az.mjs:12-16). The checksum is the
-`linux-x64` value in the release manifest of Claude Code 2.1.284 (infra/azure-private/Deploy-Gateway.ps1:93-94).
+build; without it, the CLI prints the build log (tests/azure-private/fake-az.mjs:15-19). The checksum is the
+`linux-x64` value in the release manifest of Claude Code 2.1.284 (infra/azure-private/Deploy-Gateway.ps1:96-97).
 
 # [Script](#tab/script)
 
@@ -533,7 +534,7 @@ az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/
 ```
 
 A new service principal can take a few seconds to reach Microsoft Graph; the script retries the role assignment
-(infra/azure-private/lib/Steps.App.psm1:69-73).
+(infra/azure-private/lib/Steps.App.psm1:87-91).
 
 # [Script](#tab/script)
 
@@ -545,7 +546,7 @@ The script creates the client secret in the app step, valid for `-ClientSecretDa
 `-RotateClientSecret` it adds a new secret and restarts the latest revision, because a changed secret reaches a
 revision only when the revision restarts or a new one is deployed
 ([manage secrets](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets);
-infra/azure-private/lib/Steps.App.psm1:118-121). The old secret stays valid until it expires, since `--append` keeps it.
+infra/azure-private/lib/Steps.App.psm1:153-158; infra/azure-private/lib/Steps.App.psm1:172-175). The old secret stays valid until it expires, since `--append` keeps it.
 
 ---
 
@@ -712,7 +713,7 @@ pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step app -MinReplicas 2 -MaxR
 
 The step checks that config/gateway.azure-private.yaml is the rendering of its admin file, creates the secrets, writes
 the definition to a temporary folder, deploys it and waits for the revision to be ready
-(infra/azure-private/lib/Steps.App.psm1:81-127).
+(infra/azure-private/lib/Steps.App.psm1:120-178).
 
 ---
 
@@ -792,7 +793,7 @@ and the password (infra/azure-private/lib/Steps.Dev.psm1:38-50).
 
 From inside the network, every host name resolves to a private address and the gateway reports ready; from outside,
 Foundry refuses a request. The verify step runs these checks on the test machine with Run Command and on the
-operator's machine (infra/azure-private/lib/Steps.Dev.psm1:80-121).
+operator's machine (infra/azure-private/lib/Steps.Dev.psm1:80-129).
 
 # [Azure portal](#tab/portal)
 
@@ -849,7 +850,7 @@ verify step printed for this deployment starts with `2fbc49857fa6e209`.
 
 ## Run the whole deployment with the script
 
-The script runs every step in order, creating what is missing (infra/azure-private/Deploy-Gateway.ps1:111-131):
+The script runs every step in order, creating what is missing (infra/azure-private/Deploy-Gateway.ps1:125-141):
 
 ```powershell
 # Print the commands without changing anything.
@@ -862,11 +863,12 @@ pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step app,verify
 
 Every parameter is in the [script reference](reference-scripts.md#deploy-gatewayps1). A re-run reuses existing
 resources and reports each with `FOUND`. It can also reconcile settings that drifted: Foundry's public access and key
-authentication, the DNS records, the role assignments, the Entra app's redirect URI and role assignment. It recovers
-secrets it cannot read, such as setting a new PostgreSQL password, runs the test machine's setup again, and updates
-the Container App with PATCH semantics (infra/azure-private/lib/Steps.Base.psm1:52-53;
-infra/azure-private/lib/Steps.App.psm1:44-48; infra/azure-private/lib/Steps.App.psm1:98-103;
-infra/azure-private/lib/Steps.Dev.psm1:73-74). `-Plan` lists what a re-run would change.
+authentication, the DNS records, the role assignments, the Entra app's redirect URI and role assignment. It creates
+a secret the Container App does not have, such as a new PostgreSQL password, and stops before any change when
+reading a secret fails for another reason, such as a service that is unavailable; it runs the test machine's setup
+again, and updates the Container App with PATCH semantics (infra/azure-private/lib/Steps.Base.psm1:52-53;
+infra/azure-private/lib/Steps.App.psm1:57-61; infra/azure-private/lib/Steps.App.psm1:136-161;
+infra/azure-private/lib/Az.psm1:112-123; infra/azure-private/lib/Steps.Dev.psm1:73-74). `-Plan` lists what a re-run would change.
 
 ## Results of the test deployment
 
@@ -905,12 +907,13 @@ specific to this deployment on Azure:
 | `az containerapp env create` fails with `AKSCapacityHeavyUsage`: "Creating a new cluster is unavailable at this time in region ..." | The region has no capacity for a new environment | Create the network and the environment in another region; the Foundry account can stay where the quota is | docs/UNKNOWNS.md:74 |
 | `az postgres flexible-server create` is refused for the region | The subscription is restricted from PostgreSQL flexible server in that region | Choose a region where `az postgres flexible-server list-skus -l <region>` lists the tier | docs/UNKNOWNS.md:74 |
 | A Claude deployment is refused | The deployment has no `modelProviderData` block | Include `organizationName`, `countryCode` and `industry` | https://learn.microsoft.com/en-us/azure/developer/ai/how-to/deploy-claude-foundry#terms-of-use |
-| `az acr build` output does not parse as JSON | Without `--no-logs`, the CLI prints the build log | Add `--no-logs`, then read `status` from the JSON | tests/azure-private.test.mjs:120-130 |
-| `az network private-endpoint dns-zone-group show` returns `{}` with exit code 0 | The group does not exist; the CLI answers with an empty object | Treat an empty object as missing | infra/azure-private/lib/Az.psm1:85-87 |
+| `az acr build` output does not parse as JSON | Without `--no-logs`, the CLI prints the build log | Add `--no-logs`, then read `status` from the JSON | tests/azure-private.test.mjs:133-143 |
+| `az network private-endpoint dns-zone-group show` returns `{}` with exit code 0 | The group does not exist; the CLI answers with an empty object | Treat an empty object as missing | infra/azure-private/lib/Az.psm1:96-110 |
 | `/login`: "Gateway hosts must be on your organization's private network; <host> resolves to the public (or unrecognized) address <ip>" | The developer's DNS does not resolve the gateway's zone to the private IP | Forward the default domain's zone, or the custom domain's zone, to the private DNS zone through a DNS Private Resolver | https://code.claude.com/docs/en/claude-apps-gateway-on-aws#troubleshooting |
 | `/login` gets `403`; the gateway logs `access.denied` with reason `ip_not_allowlisted` and a `client_ip` in `100.100.0.0/16` | `listen.trusted_proxies` does not name the addresses the Container Apps ingress connects from, so the gateway checks the ingress's address against `access_control.allow_cidrs`; `/readyz` still answers, because health probes are exempt | Name the four ranges a workload profile environment reserves in `trusted_proxies`, as config/gateway.azure-private.yaml:14 does | docs/adr/0005-network-restricted-deployment.md:79-87 |
+| A step stops with `az containerapp ... failed (1): ERROR: Service Unavailable` and an HTML page | The Container Apps service answered 503 to a read; on 2026-09-30 the same read succeeded a few minutes later | Run the step again. The app step reads every secret it needs before it changes anything, stops when a read fails, and makes a secret anew only when the app does not have it | tests/azure-private.test.mjs:448-483 |
 | The revision does not become ready | `/readyz` fails while PostgreSQL is unreachable: a missing zone link, or a wrong password | Read the console log, then check the PostgreSQL zone's link and the `pg-password` secret | https://code.claude.com/docs/en/claude-apps-gateway-deploy#health |
-| During a rollout the new replicas log `remaining connection slots are reserved for roles with the SUPERUSER attribute` | The old revision's replicas still hold their connections while the new ones open theirs, and together they exceed the server's user connections | Keep 2 × maximum replicas × `store.max_connections` within the server's user connections, or choose a larger PostgreSQL size | tests/azure-private.test.mjs:135-138 |
+| During a rollout the new replicas log `remaining connection slots are reserved for roles with the SUPERUSER attribute` | The old revision's replicas still hold their connections while the new ones open theirs, and together they exceed the server's user connections | Keep 2 × maximum replicas × `store.max_connections` within the server's user connections, or choose a larger PostgreSQL size | tests/azure-private.test.mjs:148-151 |
 | `/login` times out; the gateway logs `Postgres is not answering`, then, after `store.readiness_grace_seconds`, that `/readyz` reports not ready | The PostgreSQL server is stopped or unreachable. On 2026-09-29 an automated job of the test subscription stopped it (activity log: "Stops an existing server"); new sign-ins need the store, so the ingress stops routing to replicas that are not ready | Start the server with `az postgres flexible-server start`, and exclude it from automation that stops idle servers; the gateway reports ready again once PostgreSQL answers | https://code.claude.com/docs/en/claude-apps-gateway-deploy#outage-behavior |
 | Inference fails with `401` or `403` from Foundry | The gateway's identity lacks `Cognitive Services User` on the account, or the assignment has not propagated | Assign the role on the Foundry account and retry after a few minutes | https://code.claude.com/docs/en/claude-apps-gateway-config#microsoft-foundry |
 
@@ -935,6 +938,23 @@ ContainerAppConsoleLogs_CL
 An `inference` event names the user, the model, the upstream and the response status (tests/live/lib.mjs:177-185).
 Client metrics, logs and traces reach a collector through the gateway when `telemetry.forward_to` names one
 ([telemetry](https://code.claude.com/docs/en/claude-apps-gateway-config#telemetry)).
+
+With `deployment.telemetry` set to `true` in `config/gateway-admin.azure-private.json`, the gateway sends client
+metrics, and no logs or traces, to an OpenTelemetry Collector sidecar on `localhost:4318`, which exports them to the
+Application Insights component `appi-claude-gw` on the same workspace with the gateway's managed identity
+(docs/adr/0007-telemetry-through-a-collector-sidecar-to-application-insights.md). The metrics are in the `AppMetrics`
+table, kept 30 days, with the user's email and the model in `Properties`; Claude Code's metric names start with
+`claude_code.` ([monitoring usage](https://code.claude.com/docs/en/monitoring-usage)):
+
+```kusto
+AppMetrics
+| where Name startswith 'claude_code.'
+| summarize sum(Sum) by Name, tostring(Properties['user.email']), tostring(Properties['model'])
+```
+
+Until P-32 limits reading to a named group, every reader of the workspace can read those emails, so while telemetry
+is on only the operator holds a role of the app registration
+([connect clients](how-to-connect-clients.md#prerequisites)).
 
 ## Clean up resources
 
