@@ -1,0 +1,8 @@
+{
+  "$comment": "Admin file for the Azure test deployment (ADR-0004). node scripts/admin/new-gateway-config.mjs renders config/gateway.azure-test.yaml from it; node infra/azure-test/deploy.mjs --step app deploys that file. roles: the app roles in infra/azure-test/entra-app.json that the gateway admits. models: the Foundry deployments it serves. policies (optional): one per role, with the models that role may use.",
+  "roles": ["Gateway.Standard", "Gateway.Premium"],
+  "models": [
+    { "id": "claude-opus-5", "label": "Claude Opus 5", "deployment": "claude-opus-5" },
+    { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "deployment": "claude-sonnet-5" }
+  ]
+}

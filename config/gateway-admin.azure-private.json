@@ -1,0 +1,43 @@
+{
+  "$comment": "Admin file for the network-restricted deployment (ADR-0005). node scripts/admin/new-gateway-config.mjs --topology private renders config/gateway.azure-private.yaml from it; pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step app deploys that file. deployment.developerCidrs: the networks developers connect from, which become access_control.allow_cidrs; the sign-in limits are per client address for each 10 minutes; storeConnectionsPerReplica is store.max_connections; desktop opts every policy in to Claude Desktop.",
+  "roles": [
+    "Gateway.Standard",
+    "Gateway.Premium"
+  ],
+  "models": [
+    {
+      "id": "claude-opus-5",
+      "label": "Claude Opus 5",
+      "deployment": "claude-opus-5"
+    },
+    {
+      "id": "claude-sonnet-5",
+      "label": "Claude Sonnet 5",
+      "deployment": "claude-sonnet-5"
+    }
+  ],
+  "policies": [
+    {
+      "role": "Gateway.Premium",
+      "models": [
+        "claude-opus-5",
+        "claude-sonnet-5"
+      ]
+    },
+    {
+      "role": "Gateway.Standard",
+      "models": [
+        "claude-sonnet-5"
+      ]
+    }
+  ],
+  "deployment": {
+    "developerCidrs": [
+      "10.40.0.0/16"
+    ],
+    "signInsPerAddress": 1000,
+    "codeSubmissionsPerAddress": 100,
+    "storeConnectionsPerReplica": 5,
+    "desktop": true
+  }
+}

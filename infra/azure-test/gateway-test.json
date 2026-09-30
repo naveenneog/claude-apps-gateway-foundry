@@ -1,0 +1,246 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Claude apps gateway test deployment on Azure Container Apps (docs/adr/0003-azure-test-deployment-with-restricted-ingress.md). Deployed by infra/azure-test/deploy.mjs in two passes: deployApp=false creates the registry, identity, workspace and environment; deployApp=true adds the Container App once the image exists."
+  },
+  "parameters": {
+    "location": { "type": "string", "defaultValue": "[resourceGroup().location]" },
+    "runId": { "type": "string" },
+    "testerCidr": { "type": "string", "metadata": { "description": "The one range both allow lists admit; deploy.mjs refuses ranges wider than /24." } },
+    "foundryResourceGroup": { "type": "string" },
+    "foundryAccountName": { "type": "string" },
+    "deployApp": { "type": "bool", "defaultValue": false },
+    "gatewayImage": { "type": "string", "defaultValue": "" },
+    "postgresImage": { "type": "string", "defaultValue": "" },
+    "oidcClientId": { "type": "string", "defaultValue": "" },
+    "oidcCredentialId": { "type": "string", "defaultValue": "", "metadata": { "description": "Key id of the client secret in use. A new id changes the template, so the app starts a revision that reads the new secret." } },
+    "allowedEmailDomain": { "type": "string", "defaultValue": "" },
+    "gatewayConfigYaml": { "type": "string", "defaultValue": "" },
+    "oidcClientSecret": { "type": "securestring", "defaultValue": "" },
+    "gatewayJwtSecret": { "type": "securestring", "defaultValue": "" },
+    "postgresPassword": { "type": "securestring", "defaultValue": "" }
+  },
+  "variables": {
+    "suffix": "[uniqueString(resourceGroup().id)]",
+    "identityName": "id-claude-gw",
+    "acrName": "[concat('crclaudegw', substring(variables('suffix'), 0, 8))]",
+    "workspaceName": "[concat('log-claude-gw-', variables('suffix'))]",
+    "environmentName": "cae-claude-gw",
+    "appName": "ca-claude-gw",
+    "acrPullName": "[guid(resourceId('Microsoft.ContainerRegistry/registries', concat('crclaudegw', substring(variables('suffix'), 0, 8))), 'id-claude-gw', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+    "foundryRoleDeployment": "claude-gw-foundry-role",
+    "tags": { "purpose": "claude-apps-gateway-test", "runId": "[parameters('runId')]" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('identityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]"
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('acrName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "sku": { "name": "Basic" },
+      "properties": {
+        "adminUserEnabled": false,
+        "publicNetworkAccess": "Enabled",
+        "policies": { "azureADAuthenticationAsArmPolicy": { "status": "enabled" } }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.ContainerRegistry/registries/{0}', variables('acrName'))]",
+      "name": "[variables('acrPullName')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+      ],
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('workspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "properties": {
+        "sku": { "name": "PerGB2018" },
+        "retentionInDays": 30,
+        "features": { "immediatePurgeDataOn30Days": true, "enableLogAccessUsingOnlyResourcePermissions": false }
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('environmentName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "dependsOn": ["[resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName'))]"],
+      "properties": {
+        "zoneRedundant": false,
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2023-09-01').primarySharedKey]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "[variables('foundryRoleDeployment')]",
+      "resourceGroup": "[parameters('foundryResourceGroup')]",
+      "dependsOn": ["[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"],
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": { "scope": "inner" },
+        "parameters": {
+          "accountName": { "value": "[parameters('foundryAccountName')]" },
+          "principalId": { "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]" }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": { "accountName": { "type": "string" }, "principalId": { "type": "string" } },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', parameters('accountName'))]",
+              "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName')), parameters('principalId'), 'a97b65f3-24c7-4388-baec-2e87135dc908')]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')]",
+                "principalId": "[parameters('principalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ],
+          "outputs": {
+            "roleAssignmentId": {
+              "type": "string",
+              "value": "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName')), parameters('principalId'), 'a97b65f3-24c7-4388-baec-2e87135dc908'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('deployApp')]",
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('appName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), 'Microsoft.Authorization/roleAssignments', variables('acrPullName'))]",
+        "[resourceId(parameters('foundryResourceGroup'), 'Microsoft.Resources/deployments', variables('foundryRoleDeployment'))]"
+      ],
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": { "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]": {} }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "allowInsecure": false,
+            "ipSecurityRestrictions": [
+              { "name": "tester-egress", "description": "Tester egress range (ADR-0003)", "action": "Allow", "ipAddressRange": "[parameters('testerCidr')]" }
+            ],
+            "traffic": [{ "latestRevision": true, "weight": 100 }]
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-07-01').loginServer]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]"
+            }
+          ],
+          "secrets": [
+            { "name": "oidc-client-secret", "value": "[parameters('oidcClientSecret')]" },
+            { "name": "jwt-secret", "value": "[parameters('gatewayJwtSecret')]" },
+            { "name": "pg-password", "value": "[parameters('postgresPassword')]" },
+            { "name": "gateway-config", "value": "[parameters('gatewayConfigYaml')]" }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "gateway",
+              "image": "[parameters('gatewayImage')]",
+              "resources": { "cpu": "[json('0.75')]", "memory": "1.5Gi" },
+              "env": [
+                { "name": "CLAUDE_GATEWAY_LOG_LEVEL", "value": "debug" },
+                { "name": "AZURE_CLIENT_ID", "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId]" },
+                { "name": "GATEWAY_PUBLIC_URL", "value": "[format('https://{0}.{1}', variables('appName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('environmentName')), '2024-03-01').defaultDomain)]" },
+                { "name": "OIDC_ISSUER", "value": "[format('https://login.microsoftonline.com/{0}/v2.0', subscription().tenantId)]" },
+                { "name": "OIDC_CLIENT_ID", "value": "[parameters('oidcClientId')]" },
+                { "name": "OIDC_CLIENT_SECRET", "secretRef": "oidc-client-secret" },
+                { "name": "OIDC_CREDENTIAL_ID", "value": "[parameters('oidcCredentialId')]" },
+                { "name": "ALLOWED_EMAIL_DOMAIN", "value": "[parameters('allowedEmailDomain')]" },
+                { "name": "GATEWAY_JWT_SECRET", "secretRef": "jwt-secret" },
+                { "name": "GATEWAY_PG_PASSWORD", "secretRef": "pg-password" },
+                { "name": "FOUNDRY_RESOURCE", "value": "[parameters('foundryAccountName')]" },
+                { "name": "TESTER_CIDR", "value": "[parameters('testerCidr')]" }
+              ],
+              "probes": [
+                { "type": "Startup", "httpGet": { "path": "/healthz", "port": 8080 }, "initialDelaySeconds": 5, "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 10 },
+                { "type": "Liveness", "httpGet": { "path": "/healthz", "port": 8080 }, "periodSeconds": 15, "timeoutSeconds": 3, "failureThreshold": 3 },
+                { "type": "Readiness", "httpGet": { "path": "/readyz", "port": 8080 }, "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 3 }
+              ],
+              "volumeMounts": [{ "volumeName": "gateway-config", "mountPath": "/etc/claude" }]
+            },
+            {
+              "name": "postgres",
+              "image": "[parameters('postgresImage')]",
+              "args": ["postgres", "-c", "listen_addresses=127.0.0.1"],
+              "resources": { "cpu": "[json('0.25')]", "memory": "0.5Gi" },
+              "env": [
+                { "name": "POSTGRES_USER", "value": "gateway" },
+                { "name": "POSTGRES_DB", "value": "gateway" },
+                { "name": "POSTGRES_PASSWORD", "secretRef": "pg-password" },
+                { "name": "PGDATA", "value": "/var/lib/postgresql/data/pgdata" }
+              ],
+              "volumeMounts": [{ "volumeName": "pgdata", "mountPath": "/var/lib/postgresql/data" }]
+            }
+          ],
+          "scale": { "minReplicas": 1, "maxReplicas": 1 },
+          "volumes": [
+            { "name": "gateway-config", "storageType": "Secret", "secrets": [{ "secretRef": "gateway-config", "path": "gateway.yaml" }] },
+            { "name": "pgdata", "storageType": "EmptyDir" }
+          ]
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "acrName": { "type": "string", "value": "[variables('acrName')]" },
+    "acrLoginServer": { "type": "string", "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), '2023-07-01').loginServer]" },
+    "appName": { "type": "string", "value": "[variables('appName')]" },
+    "environmentName": { "type": "string", "value": "[variables('environmentName')]" },
+    "gatewayFqdn": { "type": "string", "value": "[format('{0}.{1}', variables('appName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('environmentName')), '2024-03-01').defaultDomain)]" },
+    "identityId": { "type": "string", "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName'))]" },
+    "identityClientId": { "type": "string", "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId]" },
+    "identityPrincipalId": { "type": "string", "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]" },
+    "workspaceName": { "type": "string", "value": "[variables('workspaceName')]" },
+    "workspaceCustomerId": { "type": "string", "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2023-09-01').customerId]" },
+    "foundryRoleAssignmentId": { "type": "string", "value": "[reference(resourceId(parameters('foundryResourceGroup'), 'Microsoft.Resources/deployments', variables('foundryRoleDeployment')), '2022-09-01').outputs.roleAssignmentId.value]" }
+  }
+}

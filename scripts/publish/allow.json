@@ -1,0 +1,55 @@
+{
+  "_readme": "Values scripts/publish/check-public.mjs accepts (ADR-0006, T-75). Each entry needs a why; an entry without one suppresses nothing. Adding an entry is a publication decision: name the file that needs it and why the value can be public.",
+  "allow": [
+    {
+      "rule": "aca-host",
+      "value": "politebush-4e216865.northcentralus",
+      "why": "The environment of the network-restricted example deployment (ADR-0005): its host names have no public DNS record and the environment has no public address (T-16); the tutorial's screenshots show it (ADR-0006)."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "20.1.2.3",
+      "why": "A made-up public address: tests/azure-private.test.mjs expects the verify step to count it as public, tests/deploy-plan.test.mjs accepts it as a tester range, and tests/publish-check.test.mjs uses it as an allowed value."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "20.10.5.1",
+      "why": "A made-up public address that tests/admin-policy.test.mjs expects new-client-policy.mjs to refuse."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "172.32.0.9",
+      "why": "The first public address after 172.16.0.0/12, which tests/azure-private.test.mjs expects the verify step to count as public."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "203.0.0.0/16",
+      "why": "A /16 around the documentation range that stands for the tester's range, which tests/deploy-plan.test.mjs expects deploy.mjs to refuse as wider than /24."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "203.0.114.1",
+      "why": "The address in the /24 after the documentation range, which tests/deploy-plan.test.mjs expects outside 203.0.113.0/26: only the third octet differs."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "104.208.200.90",
+      "why": "An Azure Container Registry Tasks agent address, recorded as T-42's evidence in docs/TEST-PLAN.md; the address belongs to Azure."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "154.0.0.0",
+      "why": "Not an address: the browser version in the Creator string of docs/export/claude-apps-gateway-azure.pdf, 'HeadlessChrome/154.0.0.0', which the PDF builder's browser writes. A rebuild with another browser version needs its own entry."
+    },
+    {
+      "rule": "user-profile-path",
+      "value": "dev",
+      "why": "The made-up developer profile of the examples in docs/learn/quickstart-developer.md and tests/inference-runner.test.mjs."
+    },
+    {
+      "rule": "user-profile-path",
+      "value": "x",
+      "why": "A made-up profile in the resolver cases of tests/deploy-spawn.test.mjs."
+    }
+  ]
+}

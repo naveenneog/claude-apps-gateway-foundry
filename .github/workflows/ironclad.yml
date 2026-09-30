@@ -1,0 +1,78 @@
+name: ironclad
+
+# The gate, in CI — so a pull request cannot skip what the pre-commit hook enforces locally.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# The jobs read the repository and upload a report; the token needs no write scope (ADR-0006).
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: Ironclad gate (packet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # the ledger checks read commit history
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: ${{ hashFiles('package-lock.json') != '' && 'npm' || '' }}
+
+      - name: Install dependencies
+        if: hashFiles('package.json') != ''
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      - name: Run the gate
+        run: node .ironclad/gate.mjs --stage packet
+
+      # The gate prints only the totals of a failing suite; this names the failing tests and their assertions.
+      - name: Name the failing tests
+        if: failure()
+        run: node --test --test-reporter=spec tests/*.test.mjs 2>&1 | grep -E -A 25 '^\s*✖' | head -200 || true
+
+      - name: Gate report (JSON)
+        if: always()
+        run: node .ironclad/gate.mjs --stage packet --no-run --json > ironclad-report.json || true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ironclad-report
+          path: ironclad-report.json
+          if-no-files-found: ignore
+
+  windows:
+    name: Developer and admin scripts on Windows
+    # The developer scripts need Windows PowerShell 5.1, cmd and DPAPI, so on ubuntu-latest their tests skip. Here the
+    # CGW_REQUIRE_* variables turn every such skip into a failure (tests/developer/harness.mjs).
+    runs-on: windows-latest
+    env:
+      CGW_REQUIRE_WINDOWS: '1'
+      CGW_REQUIRE_CLAUDE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install the Claude Code version the tests pin
+        run: npm install -g @anthropic-ai/claude-code@2.1.272 --no-audit --no-fund
+
+      - name: Check Windows PowerShell 5.1 and Claude Code 2.1.272
+        shell: pwsh
+        run: |
+          $ps = & powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+          if ($ps -notmatch '^5\.1\.') { throw "Windows PowerShell 5.1 expected, found $ps" }
+          $claude = & claude --version
+          if ($claude -notmatch '^2\.1\.272 ') { throw "Claude Code 2.1.272 expected, found $claude" }
+
+      - name: Developer and admin tests
+        run: node --test tests/developer-connect.test.mjs tests/developer-helper.test.mjs tests/developer-profile.test.mjs tests/admin-config.test.mjs tests/admin-developer.test.mjs tests/admin-policy.test.mjs

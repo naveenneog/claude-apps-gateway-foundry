@@ -1,0 +1,32 @@
+- name: Claude Code through the Claude apps gateway
+  items:
+    - name: Overview
+      href: overview.md
+    - name: Quickstarts
+      items:
+        - name: Connect Claude Code on Windows
+          href: quickstart-developer.md
+    - name: Tutorials
+      items:
+        - name: Deploy on Azure in a network-restricted environment
+          href: tutorial-deploy-network-restricted.md
+    - name: Concepts
+      items:
+        - name: Plan capacity for 25,000 developers
+          href: concept-plan-for-scale.md
+    - name: How-to guides
+      items:
+        - name: Connect Claude Code, VS Code and Claude Desktop
+          href: how-to-connect-clients.md
+        - name: Configure models, roles and developer access
+          href: how-to-admin-configure.md
+        - name: Run the inference tests
+          href: how-to-test-inference.md
+    - name: Reference
+      items:
+        - name: Scripts
+          href: reference-scripts.md
+    - name: Troubleshooting
+      items:
+        - name: Developer profile
+          href: troubleshoot.md

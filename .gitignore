@@ -1,0 +1,8 @@
+# Ironclad: secrets never enter git
+.env
+.env.*
+!.env.example
+
+# Azure test deployment: non-secret identifiers for teardown, and live-test evidence
+infra/azure-test/.state/
+tests/live/out/

@@ -1,0 +1,50 @@
+# Claude apps gateway: test deployment on Azure Container Apps (ADR-0003).
+# Generated from config/gateway-admin.azure-test.json by the admin script new-gateway-config.mjs (ADR-0004).
+# Mounted at /etc/claude/gateway.yaml from the Container App secret "gateway-config".
+# Secrets and environment-specific values are ${VAR} references to variables that
+# infra/azure-test/gateway-test.json sets on the gateway container; an undefined one fails boot.
+# Needs Claude Code 2.1.274 or later on the gateway (store.connect_timeout_seconds); the image pins 2.1.280.
+
+listen:
+  host: 0.0.0.0
+  port: 8080
+  public_url: "${GATEWAY_PUBLIC_URL}"
+  # The Container Apps ingress connects from private addresses and appends the client address to
+  # X-Forwarded-For; only the rightmost entry comes from the platform (U-32).
+  trusted_proxies: [10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16]
+
+oidc:
+  issuer: "${OIDC_ISSUER}"
+  client_id: "${OIDC_CLIENT_ID}"
+  client_secret: "${OIDC_CLIENT_SECRET}"
+  allowed_email_domains: ["${ALLOWED_EMAIL_DOMAIN}"]
+  # The app does not require assignment (U-39), so admission is by app role in the roles claim.
+  groups_claim: roles
+  allowed_groups: [Gateway.Standard, Gateway.Premium]
+
+session:
+  jwt_secret: "${GATEWAY_JWT_SECRET}"
+  ttl_hours: 1
+
+store:
+  postgres_url: postgres://gateway@127.0.0.1:5432/gateway
+  password: "${GATEWAY_PG_PASSWORD}"
+  connect_timeout_seconds: 10
+
+upstreams:
+  - provider: foundry
+    resource: "${FOUNDRY_RESOURCE}"
+    auth: { use_azure_ad: true }
+
+# Only the deployments the Foundry account serves (U-7); built-in IDs would be tried there too.
+auto_include_builtin_models: false
+models:
+  - id: claude-opus-5
+    label: Claude Opus 5
+    upstream_model: { foundry: claude-opus-5 }
+  - id: claude-sonnet-5
+    label: Claude Sonnet 5
+    upstream_model: { foundry: claude-sonnet-5 }
+
+access_control:
+  allow_cidrs: ["${TESTER_CIDR}"]

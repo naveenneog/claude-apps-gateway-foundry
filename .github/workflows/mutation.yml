@@ -1,0 +1,111 @@
+name: mutation
+
+# The mutation checks of tests/mutate-*.ps1 on GitHub-hosted Windows runners, so a run does not load a shared
+# workstation (P-26, T-67). Started by hand: a full run takes several runner-hours. A private repository's
+# windows-latest runner has 2 CPUs, and each job may run up to 6 hours (docs/UNKNOWNS.md, U-54), so the admin and
+# developer scripts run in shards, which -Shard k/n selects and -List shows.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutate:
+    name: ${{ matrix.suite }} ${{ matrix.shard }}
+    runs-on: windows-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { suite: ledger, script: tests/mutate-ledger.ps1, shard: '' }
+          - { suite: deploy, script: tests/mutate-deploy.ps1, shard: '' }
+          - { suite: admin, script: tests/mutate-admin.ps1, shard: '1/2' }
+          - { suite: admin, script: tests/mutate-admin.ps1, shard: '2/2' }
+          - { suite: developer, script: tests/mutate-developer.ps1, shard: '1/4' }
+          - { suite: developer, script: tests/mutate-developer.ps1, shard: '2/4' }
+          - { suite: developer, script: tests/mutate-developer.ps1, shard: '3/4' }
+          - { suite: developer, script: tests/mutate-developer.ps1, shard: '4/4' }
+    env:
+      # Every test skip that stands for a missing platform becomes a failure (tests/developer/harness.mjs).
+      CGW_REQUIRE_WINDOWS: '1'
+      CGW_REQUIRE_CLAUDE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Install the Claude Code version the tests pin
+        run: npm install -g @anthropic-ai/claude-code@2.1.272 --no-audit --no-fund
+
+      - name: Check Windows PowerShell 5.1 and Claude Code 2.1.272
+        shell: pwsh
+        run: |
+          $ps = & powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+          if ($ps -notmatch '^5\.1\.') { throw "Windows PowerShell 5.1 expected, found $ps" }
+          $claude = & claude --version
+          if ($claude -notmatch '^2\.1\.272 ') { throw "Claude Code 2.1.272 expected, found $claude" }
+
+      - name: Run ${{ matrix.script }} ${{ matrix.shard }}
+        shell: pwsh
+        env:
+          SCRIPT: ${{ matrix.script }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # Two CPUs: two mutants at a time where the script runs them in parallel.
+          $arguments = @('-NoProfile', '-File', $env:SCRIPT)
+          if ($env:SHARD) { $arguments += @('-Shard', $env:SHARD, '-Parallel', '2') }
+          & pwsh @arguments 2>&1 | Tee-Object -FilePath mutation.log
+          $code = $LASTEXITCODE
+          $summary = Select-String -Path mutation.log -Pattern 'mutations caught|^shard |^baseline' | ForEach-Object { $_.Line.Trim() }
+          "### $env:SCRIPT $env:SHARD" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          $summary | ForEach-Object { "- $_" } | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          exit $code
+
+      - name: Keep the log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-${{ matrix.suite }}-${{ strategy.job-index }}
+          path: mutation.log
+          if-no-files-found: warn
+
+  coverage:
+    name: every mutation ran once
+    needs: mutate
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutation-*
+          path: logs
+
+      - name: Compare the shards' counts with -List
+        shell: pwsh
+        run: |
+          # Each sharded suite: the "N of M mutations caught" lines of its shards must add up to the -List count.
+          $failed = $false
+          foreach ($suite in 'admin', 'developer') {
+            $expected = @(& pwsh -NoProfile -File "tests/mutate-$suite.ps1" -List | Where-Object { $_ -match '^\d+ ' }).Count
+            $caught = 0; $ran = 0
+            foreach ($log in Get-ChildItem -Path logs -Recurse -Filter mutation.log | Where-Object { $_.Directory.Name -like "mutation-$suite-*" }) {
+              $m = Select-String -Path $log.FullName -Pattern '^(\d+) of (\d+) mutations caught' | Select-Object -Last 1
+              if ($m) { $caught += [int]$m.Matches[0].Groups[1].Value; $ran += [int]$m.Matches[0].Groups[2].Value }
+            }
+            $line = "$suite`: $caught caught of $ran run; -List names $expected"
+            $line | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            Write-Host $line
+            if ($ran -ne $expected -or $caught -ne $expected) { $failed = $true }
+          }
+          if ($failed) { exit 1 }

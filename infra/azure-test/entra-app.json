@@ -1,0 +1,46 @@
+{
+  "description": "Claude apps gateway test deployment on Azure Container Apps (ADR-0003). Created and deleted by infra/azure-test.",
+  "signInAudience": "AzureADMyOrg",
+  "web": {
+    "implicitGrantSettings": {
+      "enableIdTokenIssuance": false,
+      "enableAccessTokenIssuance": false
+    }
+  },
+  "optionalClaims": {
+    "idToken": [
+      { "name": "email", "essential": false, "additionalProperties": [] }
+    ],
+    "accessToken": [],
+    "saml2Token": []
+  },
+  "appRoles": [
+    {
+      "id": "aeaba2ab-b8b2-457d-9e17-e018462319e6",
+      "allowedMemberTypes": ["User"],
+      "displayName": "Gateway Standard",
+      "description": "Signs in to the Claude apps gateway test deployment.",
+      "value": "Gateway.Standard",
+      "isEnabled": true
+    },
+    {
+      "id": "32a7d35d-0d69-4ec1-8867-b9571ef204bc",
+      "allowedMemberTypes": ["User"],
+      "displayName": "Gateway Premium",
+      "description": "Signs in to the Claude apps gateway test deployment; reserved for per-group policy in P-6.",
+      "value": "Gateway.Premium",
+      "isEnabled": true
+    }
+  ],
+  "requiredResourceAccess": [
+    {
+      "resourceAppId": "00000003-0000-0000-c000-000000000000",
+      "resourceAccess": [
+        { "id": "37f7f235-527c-4136-accd-4a02d197296e", "type": "Scope" },
+        { "id": "14dad69e-099b-42c9-810b-d002981feec1", "type": "Scope" },
+        { "id": "64a6cdd6-aab1-4aaf-94b8-3cc8405e90d0", "type": "Scope" },
+        { "id": "7427e0e9-2fba-42fe-b0c0-848c9e6a8182", "type": "Scope" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+# Claude apps gateway: network-restricted deployment on Azure Container Apps (ADR-0005).
+# Generated from config/gateway-admin.azure-private.json by the admin script new-gateway-config.mjs --topology private (ADR-0004).
+# Mounted at /etc/claude/gateway.yaml from the Container App secret "gateway-config".
+# Environment-specific values and secrets are ${VAR} references to variables that
+# infra/azure-private/Deploy-Gateway.ps1 sets on the gateway container; an undefined one fails boot.
+# Needs Claude Code 2.1.282 or later on the gateway (store.readiness_grace_seconds); the image pins 2.1.284.
+
+listen:
+  host: 0.0.0.0
+  port: 8080
+  public_url: "${GATEWAY_PUBLIC_URL}"
+  # The Container Apps ingress connects from the ranges a workload profile environment reserves (measured: 100.100.0.168)
+  # and puts the client's address rightmost in X-Forwarded-For; no developer or app can hold these addresses (ADR-0005).
+  trusted_proxies: [100.100.0.0/17, 100.100.128.0/19, 100.100.160.0/19, 100.100.192.0/19]
+
+oidc:
+  issuer: "${OIDC_ISSUER}"
+  client_id: "${OIDC_CLIENT_ID}"
+  client_secret: "${OIDC_CLIENT_SECRET}"
+  allowed_email_domains: ["${ALLOWED_EMAIL_DOMAIN}"]
+  # The app does not require assignment (U-39), so admission is by app role in the roles claim.
+  groups_claim: roles
+  allowed_groups: [Gateway.Standard, Gateway.Premium]
+
+session:
+  jwt_secret: "${GATEWAY_JWT_SECRET}"
+  ttl_hours: 1
+
+store:
+  postgres_url: "postgres://${GATEWAY_PG_USER}@${GATEWAY_PG_HOST}:5432/gateway?sslmode=require"
+  password: "${GATEWAY_PG_PASSWORD}"
+  connect_timeout_seconds: 10
+  max_connections: 5
+  # A replica keeps passing /readyz through a database failover of up to five minutes.
+  readiness_grace_seconds: 300
+
+upstreams:
+  - provider: foundry
+    resource: "${FOUNDRY_RESOURCE}"
+    auth: { use_azure_ad: true }
+
+# Only the deployments the Foundry account serves (U-7); built-in IDs would be tried there too.
+auto_include_builtin_models: false
+models:
+  - id: claude-opus-5
+    label: Claude Opus 5
+    upstream_model: { foundry: claude-opus-5 }
+  - id: claude-sonnet-5
+    label: Claude Sonnet 5
+    upstream_model: { foundry: claude-sonnet-5 }
+
+# One policy per app role, in the admin file's order; the first match applies, and its availableModels list is
+# enforced at /v1/messages. Every admitted role has a policy (T-52). desktop: {} opts the policy in to Claude Desktop.
+managed:
+  policies:
+    - match: { groups: [Gateway.Premium] }
+      cli:
+        availableModels: [claude-opus-5, claude-sonnet-5]
+        enforceAvailableModels: true
+      desktop: {}
+    - match: { groups: [Gateway.Standard] }
+      cli:
+        availableModels: [claude-sonnet-5]
+        enforceAvailableModels: true
+      desktop: {}
+
+access_control:
+  allow_cidrs: [10.40.0.0/16]
+
+# Per-address sign-in limits, sized for developers who share an address (P-28).
+rate_limits:
+  device_authorization: { max: 1000, window_seconds: 600 }
+  device_verify: { max: 100, window_seconds: 600 }
