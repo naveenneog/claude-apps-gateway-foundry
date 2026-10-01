@@ -47,6 +47,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - `.github/workflows/ironclad.yml` runs with a read-only token and pins each action to a commit.
 
 ### Fixed
+- The Learn articles show their screenshots on GitHub. Each of the 20 images in `docs/learn/` used Learn's `:::image:::`
+  syntax, which GitHub shows as text; they use Markdown's `![alt](src)` now, which Learn renders too. The tutorial's
+  checklist and next-step link, Learn `[!div]` blocks that GitHub also showed as text, are plain lists. T-72 reports
+  any Learn extension that GitHub does not render (ADR-0004, amendment of 2026-10-01).
 - `Deploy-Gateway.ps1` writes the message of a step that stops as `Deploy-Gateway.ps1: <message>` on standard error,
   without the line breaks PowerShell's error view adds. The view broke long messages at the console width, on Linux inside a word, which split
   the `az acr repository untag` command and Graph URLs the messages name, and failed the public repository's CI (run

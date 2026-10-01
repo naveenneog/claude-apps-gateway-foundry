@@ -1,7 +1,8 @@
 // T-72 (docs/TEST-PLAN.md): the network-restricted deployment articles (P-29, ADR-0005). Every image an article shows
-// exists with alt text and every file in docs/learn/media is shown; each step of the tutorial has the Azure portal,
-// Azure CLI and Script tabs; every `az` command in a CLI tab is a command infra/azure-private runs; every -Step the
-// articles name is a step of the script. The fixture tests at the end show that each detector reports what it guards.
+// exists with alt text and every file in docs/learn/media is shown; no article uses a Learn extension that GitHub shows
+// as text; each step of the tutorial has the Azure portal, Azure CLI and Script tabs; every `az` command in a CLI tab is
+// a command infra/azure-private runs; every -Step the articles name is a step of the script. The fixture tests at the
+// end show that each detector reports what it guards.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,6 +38,48 @@ export function imageProblems(docs, mediaFiles, exists) {
   }
   for (const file of mediaFiles) if (!shown.has(file)) problems.push(`${file} is not shown by any article`);
   return problems;
+}
+
+// Learn's Markdown extensions that GitHub shows as literal text: the ::: family, such as :::image:::, and the [!div],
+// [!INCLUDE] and [!VIDEO] blocks. The articles are read on GitHub, where every :::image::: showed as a paragraph of text
+// and no screenshot appeared (ADR-0004, amendment of 2026-10-01). GitHub's alerts, such as > [!NOTE], render. Fenced and
+// inline code are not article text, by GFM's rules: a fence is indented at most three spaces, and the info string of a
+// backtick fence holds no backtick (https://github.github.com/gfm/#fenced-code-blocks).
+export function githubTextProblems(docs) {
+  const problems = [];
+  for (const { rel, text } of docs) {
+    let fence = null;
+    text.split('\n').forEach((line, i) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (marker && !fence && !(marker[1][0] === '`' && marker[2].includes('`'))) { fence = marker[1]; return; }
+      if (marker && fence && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) { fence = null; return; }
+      if (fence) return;
+      const learn = /:::\s*[a-z-]+|\[!(?:div|INCLUDE|VIDEO)\b/i.exec(withoutCodeSpans(line));
+      if (learn) problems.push(`${rel}:${i + 1}: ${learn[0]} is a Learn extension, which GitHub shows as text`);
+    });
+  }
+  return problems;
+}
+
+// A line without its code spans, by GFM's rule: a span opens with a run of n backticks and closes at the next run of
+// exactly n; an escaped backtick, or a run that nothing closes, is text (https://github.github.com/gfm/#code-spans).
+function withoutCodeSpans(line) {
+  let out = '';
+  let i = 0;
+  const runAt = (at) => { let n = 0; while (line[at + n] === '`') n += 1; return n; };
+  while (i < line.length) {
+    if (line[i] === '\\' && line[i + 1] === '`') { out += line.slice(i, i + 2); i += 2; continue; }
+    if (line[i] !== '`') { out += line[i]; i += 1; continue; }
+    const n = runAt(i);
+    let close = -1;
+    for (let j = i + n; j < line.length;) {
+      const m = runAt(j);
+      if (m === n) { close = j; break; }
+      j += m || 1;
+    }
+    if (close < 0) { out += line.slice(i, i + n); i += n; } else i = close + n;
+  }
+  return out;
 }
 
 // The steps of the tutorial's "Deploy the gateway" section: each has the three tabs in order and ends its tab group.
@@ -119,6 +162,10 @@ test('T-72 every image an article shows exists with alt text, and every media fi
   assert.ok(imagesOf(read(TUTORIAL)).length >= 10, 'the tutorial shows fewer than 10 images');
 });
 
+test("T-72 every article renders on GitHub: images use Markdown's ![alt](src), and no Learn extension that GitHub shows as text is left", () => {
+  assert.deepEqual(githubTextProblems(articles()), []);
+});
+
 test('T-72 each step of the tutorial has the Azure portal, Azure CLI and Script tabs', () => {
   assert.deepEqual(tabProblems(read(TUTORIAL)), []);
   assert.ok(read(TUTORIAL).split(/^### Step /m).length - 1 >= 10, 'the tutorial has fewer than 10 steps');
@@ -140,7 +187,30 @@ test('T-72 detectors: each defect in a fixture is reported', () => {
   assert.match(imageProblems(doc(`:::image type="content" source="media/b.png" alt-text="${alt}":::`), [], exists)[0], /media\/b\.png does not exist/);
   assert.match(imageProblems(doc(':::image type="content" source="media/a.png" alt-text="":::'), ['docs/learn/media/a.png'], exists)[0], /no alt text/);
   assert.match(imageProblems(doc(`![${alt}](media/b.png)`), [], exists)[0], /does not exist/, 'a Markdown image is checked too');
+  assert.match(imageProblems(doc('![](media/a.png)'), ['docs/learn/media/a.png'], exists)[0], /no alt text/, 'a Markdown image needs alt text too');
   assert.deepEqual(imageProblems(doc('No images.'), ['docs/learn/media/a.png'], exists), ['docs/learn/media/a.png is not shown by any article']);
+
+  const gh = (body) => githubTextProblems(doc(body));
+  assert.deepEqual(gh(`![${alt}](media/a.png)\n\n> [!NOTE]\n> GitHub renders its alerts.`), [], 'a Markdown image and a GitHub alert render');
+  assert.deepEqual(gh(`Text.\n:::image type="content" source="media/a.png" alt-text="${alt}":::`), ['docs/learn/x.md:2: :::image is a Learn extension, which GitHub shows as text']);
+  assert.match(gh('> [!div class="checklist"]\n> * One')[0], /^docs\/learn\/x\.md:1: \[!div is a Learn extension/);
+  assert.match(gh('## Next steps\n\n> [!div class="nextstepaction"]\n> [Next](next.md)')[0], /:3: \[!div/);
+  assert.match(gh('[!INCLUDE [intro](includes/intro.md)]')[0], /\[!INCLUDE is a Learn extension/);
+  assert.match(gh('::: zone pivot="cli"')[0], /::: zone is a Learn extension/);
+  assert.deepEqual(gh('```markdown\n:::image type="content" source="a.png" alt-text="x":::\n```'), [], 'fenced code is not article text');
+  assert.deepEqual(gh('Learn writes `:::image:::` for an image.'), [], 'inline code is not article text');
+  assert.match(gh('```powershell\naz group list\n```\n:::row:::')[0], /:4: :::row/, 'text after a closed fence is checked');
+  assert.match(gh('````markdown\n```\n````\n:::row:::')[0], /:4: :::row/, 'a shorter fence inside a longer one does not close it');
+  // GFM's code rules, as GitHub's renderer applies them (QA review, 2026-10-01).
+  assert.deepEqual(gh('    ```\n\n:::image type="content" source="a.png" alt-text="x":::'), ['docs/learn/x.md:3: :::image is a Learn extension, which GitHub shows as text'],
+    'a line indented four spaces is indented code, not a fence');
+  assert.deepEqual(gh('   ```powershell\n   :::row:::\n   ```'), [], 'a fence indented up to three spaces is a fence');
+  assert.deepEqual(gh('``:::image ` x``'), [], 'a code span of two backticks holds a single backtick');
+  assert.deepEqual(gh('```:::image```\n:::row:::'), ['docs/learn/x.md:2: :::row is a Learn extension, which GitHub shows as text'],
+    'backticks after an opening run of backticks make a code span, not a fence');
+  assert.match(gh('Escaped \\`:::image\\` backticks are text.')[0], /:1: :::image/, 'an escaped backtick opens no code span');
+  assert.match(gh('`` :::image `')[0], /:1: :::image/, 'a run of two backticks is not closed by one');
+  assert.match(gh('` :::image ``` x')[0], /:1: :::image/, 'a backtick inside a longer run closes no code span');
 
   const step = (tabs, end = '---', portalText = '**Virtual networks** > **Create**.') => `## Deploy the gateway\n\n### Step 1: X\n\n${tabs.map((t) => `# [T](#tab/${t})\n\n${t === 'portal' ? portalText : 'Text.'}\n`).join('\n')}\n${end}\n`;
   assert.deepEqual(tabProblems(step(['portal', 'cli', 'script'])), []);

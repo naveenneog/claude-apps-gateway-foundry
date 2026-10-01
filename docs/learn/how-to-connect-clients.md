@@ -164,16 +164,16 @@ On the test machine of the [tutorial](tutorial-deploy-network-restricted.md), Cl
 on 2026-09-29 (docs/TEST-PLAN.md:280-281). After **Enter** on the Cloud gateway screen, it asks to trust the gateway
 and shows the start of the certificate's SHA-256 fingerprint:
 
-:::image type="content" source="media/clients/login-trust-gateway.png" alt-text="Screenshot of Claude Code asking Trust gateway ca-claude-gw on the environment's default domain, with the certificate fingerprint 2fbc49857fa6e209 and the choices Yes, trust this gateway and No, go back.":::
+![Screenshot of Claude Code asking Trust gateway ca-claude-gw on the environment's default domain, with the certificate fingerprint 2fbc49857fa6e209 and the choices Yes, trust this gateway and No, go back.](media/clients/login-trust-gateway.png)
 
 After the trust, it opens the browser, shows the code and the gateway's verification address, and waits:
 
-:::image type="content" source="media/clients/login-device-code.png" alt-text="Screenshot of Claude Code's Cloud gateway sign-in screen with a one-time code, the address of the gateway's device page, and Waiting for sign-in to complete in your browser.":::
+![Screenshot of Claude Code's Cloud gateway sign-in screen with a one-time code, the address of the gateway's device page, and Waiting for sign-in to complete in your browser.](media/clients/login-device-code.png)
 
 The gateway's device page takes the code, then sends the browser to Microsoft Entra ID for the sign-in; a mistyped
 code is refused on the page:
 
-:::image type="content" source="media/clients/gateway-device-page.png" alt-text="Screenshot of the gateway's device page in Microsoft Edge on the test machine: Enter the code from your device, a code field and a Continue button.":::
+![Screenshot of the gateway's device page in Microsoft Edge on the test machine: Enter the code from your device, a code field and a Continue button.](media/clients/gateway-device-page.png)
 
 Administrators can publish the fingerprint from the served leaf certificate file with OpenSSL in PowerShell:
 

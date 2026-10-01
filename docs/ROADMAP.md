@@ -175,6 +175,7 @@
 - A scheduled check that the public repository's `main` holds the tree of the last published revision (ADR-0006).
 - `ironclad.yml` pins `actions/checkout` and `actions/setup-node` v4.4.0, which target Node.js 20; the public repository's first run warned that GitHub forces them onto Node.js 24. `mutation.yml` already pins v7.0.1 and v7.0.0.
 - An alert when the telemetry collector's exports fail, from the collector's own count of failed sends, since a refused export leaves no line in its log (ADR-0007).
+- The publish tests, `tests/publish-check.test.mjs`, `tests/publish-public.test.mjs` and `tests/publish-verify.test.mjs`, create a temporary folder for each case and do not remove it. On 2026-09-30 the workstation's temporary folder held 6,751 of them, 247 MB, from that day's test runs; they were deleted by hand. The publish scripts remove their own folders (found at the end of P-9).
 - The app step of `infra/azure-private` restarts the latest revision after the update when it changed a secret. A failure between the two leaves the running revision on the old secrets, and a re-run finds no secret to change, so it restarts nothing; an environment variable that changes with the secrets would make the update itself start a revision that loads them (found while fixing P-9's council round 2).
 - `Step-Registry` in `infra/azure-private` names the gateway image by its tag while the image is not in the registry, so `-Step app` run alone does not stop on a missing image as it does on a missing collector image (found while fixing P-9's council round 1).
 

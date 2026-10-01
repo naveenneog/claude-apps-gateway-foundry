@@ -30,15 +30,14 @@ without changing anything (docs/adr/0005-network-restricted-deployment.md:56-60)
 
 In this tutorial, you:
 
-> [!div class="checklist"]
-> * Create a virtual network, private DNS zones and a Foundry account with Claude deployments behind a private endpoint
-> * Create PostgreSQL with private access, a registry with the gateway image, and the gateway's managed identity
-> * Create an internal Container Apps environment, the Entra ID app registration and the gateway
-> * Check from a machine inside the network that every name resolves to a private address and the gateway is ready
+- Create a virtual network, private DNS zones and a Foundry account with Claude deployments behind a private endpoint
+- Create PostgreSQL with private access, a registry with the gateway image, and the gateway's managed identity
+- Create an internal Container Apps environment, the Entra ID app registration and the gateway
+- Check from a machine inside the network that every name resolves to a private address and the gateway is ready
 
 ## Architecture
 
-:::image type="content" source="media/network-restricted-architecture.svg" alt-text="Diagram of the deployment: developer machines on the corporate network reach the gateway's private address over ExpressRoute or VPN; the gateway runs in an internal Container Apps environment in the snet-aca subnet, stores sign-in state in PostgreSQL in snet-pg, and calls Foundry through a private endpoint in snet-pe; browsers sign in to Microsoft Entra ID.":::
+![Diagram of the deployment: developer machines on the corporate network reach the gateway's private address over ExpressRoute or VPN; the gateway runs in an internal Container Apps environment in the snet-aca subnet, stores sign-in state in PostgreSQL in snet-pg, and calls Foundry through a private endpoint in snet-pe; browsers sign in to Microsoft Entra ID.](media/network-restricted-architecture.svg)
 
 Developers reach the gateway at a host name that resolves to the environment's private static IP. `/login` in Claude
 Code accepts only a gateway whose host name resolves to private addresses
@@ -168,7 +167,7 @@ corporate network instead.
 | `snet-pg` | 10.40.3.0/27 | `Microsoft.DBforPostgreSQL/flexibleServers` | None |
 | `snet-dev` | 10.40.3.32/27 | None | `ng-dev` |
 
-:::image type="content" source="media/azure-private/vnet-subnets.png" alt-text="Screenshot of the Subnets page of vnet-claude-gw with snet-aca 10.40.0.0/23 and snet-pg 10.40.3.0/27 delegated, snet-pe 10.40.2.0/24 and snet-dev 10.40.3.32/27.":::
+![Screenshot of the Subnets page of vnet-claude-gw with snet-aca 10.40.0.0/23 and snet-pg 10.40.3.0/27 delegated, snet-pe 10.40.2.0/24 and snet-dev 10.40.3.32/27.](media/azure-private/vnet-subnets.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -208,7 +207,7 @@ linked to the virtual network, so the names resolve to the private endpoint insi
    ([private DNS quickstart](https://learn.microsoft.com/en-us/azure/dns/private-dns-getstarted-portal)).
 1. Repeat for `privatelink.openai.azure.com` and `privatelink.services.ai.azure.com`.
 
-:::image type="content" source="media/azure-private/foundry-dns-zone-links.png" alt-text="Screenshot of the Virtual Network Links page of privatelink.services.ai.azure.com with the link link-vnet-claude-gw to vnet-claude-gw, status Completed, auto registration Disabled.":::
+![Screenshot of the Virtual Network Links page of privatelink.services.ai.azure.com with the link link-vnet-claude-gw to vnet-claude-gw, status Completed, auto registration Disabled.](media/azure-private/foundry-dns-zone-links.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -260,9 +259,9 @@ private endpoint ([configure private link](https://learn.microsoft.com/en-us/azu
 the CLI tab creates the deployments through Azure Resource Manager, which does not need that path. The deployment
 recorded here created both deployments after public access was disabled.
 
-:::image type="content" source="media/azure-private/foundry-networking.png" alt-text="Screenshot of the Networking page of the Foundry account with Allow access from set to Disabled: private endpoint connections are the only way to reach the resource.":::
+![Screenshot of the Networking page of the Foundry account with Allow access from set to Disabled: private endpoint connections are the only way to reach the resource.](media/azure-private/foundry-networking.png)
 
-:::image type="content" source="media/azure-private/foundry-private-endpoint-dns.png" alt-text="Screenshot of the DNS configuration of pe-foundry: the cognitiveservices, openai and services.ai host names of the account resolve to 10.40.2.4, 10.40.2.5 and 10.40.2.6.":::
+![Screenshot of the DNS configuration of pe-foundry: the cognitiveservices, openai and services.ai host names of the account resolve to 10.40.2.4, 10.40.2.5 and 10.40.2.6.](media/azure-private/foundry-private-endpoint-dns.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -319,7 +318,7 @@ Burstable B1ms is a test size with 35 user connections; sizing is in
    private DNS zone `psql-claude-gw-<suffix>.private.postgres.database.azure.com`.
 1. After creation: the server > **Settings** > **Databases** > **+ Add**: `gateway`.
 
-:::image type="content" source="media/azure-private/postgres-networking.png" alt-text="Screenshot of the Networking page of the PostgreSQL server: connectivity method Private access (VNet Integration), virtual network vnet-claude-gw, subnet snet-pg delegated to PostgreSQL flexible servers.":::
+![Screenshot of the Networking page of the PostgreSQL server: connectivity method Private access (VNet Integration), virtual network vnet-claude-gw, subnet snet-pg delegated to PostgreSQL flexible servers.](media/azure-private/postgres-networking.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -366,7 +365,7 @@ the virtual network ([agent pools](https://learn.microsoft.com/en-us/azure/conta
 1. Build the image with the CLI tab's `az acr build`; the registry > **Services** > **Repositories** then lists
    `claude-gateway`.
 
-:::image type="content" source="media/azure-private/registry-repositories.png" alt-text="Screenshot of the Repositories page of the container registry listing the claude-gateway repository.":::
+![Screenshot of the Repositories page of the container registry listing the claude-gateway repository.](media/azure-private/registry-repositories.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -407,7 +406,7 @@ and `Cognitive Services User` lets it call the Foundry account; the gateway's Fo
 1. The Foundry account > **Access control (IAM)** > **Add role assignment**: role **Cognitive Services User**, member
    `id-claude-gw`.
 
-:::image type="content" source="media/azure-private/identity-role-assignments.png" alt-text="Screenshot of the Azure role assignments of id-claude-gw: AcrPull on the container registry and Cognitive Services User on the Foundry account.":::
+![Screenshot of the Azure role assignments of id-claude-gw: AcrPull on the container registry and Cognitive Services User on the Foundry account.](media/azure-private/identity-role-assignments.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -450,11 +449,11 @@ name inside the network
 1. **Private DNS zones** > **Create**: the default domain as the zone name. The zone > **DNS Management** >
    **Recordsets** > **+ Add**: name `*`, type A, the static IP. **Virtual Network Links** > **Add**: `vnet-claude-gw`.
 
-:::image type="content" source="media/azure-private/environment-overview.png" alt-text="Screenshot of the overview of cae-claude-gw: environment type Workload profiles, virtual network vnet-claude-gw, infrastructure subnet snet-aca, static IP 10.40.1.231, one application ca-claude-gw.":::
+![Screenshot of the overview of cae-claude-gw: environment type Workload profiles, virtual network vnet-claude-gw, infrastructure subnet snet-aca, static IP 10.40.1.231, one application ca-claude-gw.](media/azure-private/environment-overview.png)
 
-:::image type="content" source="media/azure-private/environment-networking.png" alt-text="Screenshot of the Networking page of cae-claude-gw: public network access disabled because the environment is internal, virtual network vnet-claude-gw, subnet snet-aca, virtual IP Internal.":::
+![Screenshot of the Networking page of cae-claude-gw: public network access disabled because the environment is internal, virtual network vnet-claude-gw, subnet snet-aca, virtual IP Internal.](media/azure-private/environment-networking.png)
 
-:::image type="content" source="media/azure-private/environment-dns-records.png" alt-text="Screenshot of the record sets of the private DNS zone named after the environment's default domain, with a wildcard A record for the environment's static IP.":::
+![Screenshot of the record sets of the private DNS zone named after the environment's default domain, with a wildcard A record for the environment's static IP.](media/azure-private/environment-dns-records.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -510,9 +509,9 @@ config/gateway.azure-private.yaml:22-23). The app roles, the `email` optional cl
 1. **Enterprise applications** > the app > **Users and groups** > **Add user/group**: a user or group, with a role
    ([assign users and groups](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)).
 
-:::image type="content" source="media/azure-private/entra-authentication.png" alt-text="Screenshot of the Authentication page of the app registration with the Web redirect URI https://ca-claude-gw.politebush-4e216865.northcentralus.azurecontainerapps.io/oauth/callback.":::
+![Screenshot of the Authentication page of the app registration with the Web redirect URI https://ca-claude-gw.politebush-4e216865.northcentralus.azurecontainerapps.io/oauth/callback.](media/azure-private/entra-authentication.png)
 
-:::image type="content" source="media/azure-private/entra-app-roles.png" alt-text="Screenshot of the App roles page of the app registration listing Gateway.Standard and Gateway.Premium.":::
+![Screenshot of the App roles page of the app registration listing Gateway.Standard and Gateway.Premium.](media/azure-private/entra-app-roles.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -615,9 +614,9 @@ period is 10 seconds longer ([upgrades](https://code.claude.com/docs/en/claude-a
    minimum 2, maximum 3, an HTTP rule with 150 concurrent requests
    ([scale rules](https://learn.microsoft.com/en-us/azure/container-apps/scale-app)) > **Create**.
 
-:::image type="content" source="media/azure-private/gateway-app-ingress.png" alt-text="Screenshot of the Ingress page of ca-claude-gw: ingress enabled, traffic limited to the virtual network, HTTP, target port 8080, and the endpoint on the environment's default domain.":::
+![Screenshot of the Ingress page of ca-claude-gw: ingress enabled, traffic limited to the virtual network, HTTP, target port 8080, and the endpoint on the environment's default domain.](media/azure-private/gateway-app-ingress.png)
 
-:::image type="content" source="media/azure-private/gateway-app-secrets.png" alt-text="Screenshot of the Secrets page of ca-claude-gw listing gateway-config, jwt-secret, oidc-client-secret and pg-password with hidden values.":::
+![Screenshot of the Secrets page of ca-claude-gw listing gateway-config, jwt-secret, oidc-client-secret and pg-password with hidden values.](media/azure-private/gateway-app-secrets.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -735,7 +734,7 @@ infra/azure-private/lib/Steps.Dev.psm1:9-33).
    ([Bastion Developer](https://learn.microsoft.com/en-us/azure/bastion/quickstart-host-portal)).
 1. The VM > **Operations** > **Run command** > **RunPowerShellScript**: the setup script of the CLI tab.
 
-:::image type="content" source="media/azure-private/test-vm-overview.png" alt-text="Screenshot of the overview of vm-dev: Windows 11 Enterprise in vnet-claude-gw / snet-dev with private IP address 10.40.3.36, no public IP address on its network interface, and outbound access through NAT gateway ng-dev.":::
+![Screenshot of the overview of vm-dev: Windows 11 Enterprise in vnet-claude-gw / snet-dev with private IP address 10.40.3.36, no public IP address on its network interface, and outbound access through NAT gateway ng-dev.](media/azure-private/test-vm-overview.png)
 
 The NAT gateway's public address in this screenshot is replaced with 198.51.100.10, a documentation address
 ([RFC 5737](https://www.rfc-editor.org/rfc/rfc5737)).
@@ -801,7 +800,7 @@ operator's machine (infra/azure-private/lib/Steps.Dev.psm1:80-129).
    `Resolve-DnsName ca-claude-gw.<default domain>` and `Invoke-WebRequest https://ca-claude-gw.<default domain>/readyz`.
 1. **Container Apps** > `ca-claude-gw` > **Overview**: status **Running** and the application URL on the default domain.
 
-:::image type="content" source="media/azure-private/gateway-app-overview.png" alt-text="Screenshot of the overview of ca-claude-gw: status Running, location North Central US, environment cae-claude-gw, application URL on the environment's default domain.":::
+![Screenshot of the overview of ca-claude-gw: status Running, location North Central US, environment cae-claude-gw, application URL on the environment's default domain.](media/azure-private/gateway-app-overview.png)
 
 # [Azure CLI](#tab/cli)
 
@@ -978,9 +977,7 @@ Remove-Item -Recurse -Force $work
 
 ## Next steps
 
-> [!div class="nextstepaction"]
-> [Connect Claude Code, VS Code and Claude Desktop](how-to-connect-clients.md)
-
+- [Connect Claude Code, VS Code and Claude Desktop](how-to-connect-clients.md)
 - [Plan capacity for 25,000 developers](concept-plan-for-scale.md)
 - [Configure models, roles and developer access](how-to-admin-configure.md)
 - [Script reference](reference-scripts.md)

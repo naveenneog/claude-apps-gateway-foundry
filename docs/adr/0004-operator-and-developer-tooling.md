@@ -309,6 +309,25 @@ checks failed for reasons in the suite, which change these decisions:
   USD per million tokens, since no override rate can be 0, so the input charge cannot reach the floor estimate, and
   with a control pair of reads (ROADMAP P-8; QA follow-up review of the live-run fixes).
 
+## Amendment, 2026-10-01: Learn articles that GitHub renders
+
+The owner reported that the documentation on GitHub showed no screenshots. GitHub's renderer showed each of the 20
+`:::image:::` references in `docs/learn/` as a paragraph of text, and the two `> [!div ...]` blocks of the tutorial as
+text too; the 19 PNG files and the SVG were intact (docs/TEST-PLAN.md, T-72).
+
+| Fact | Source |
+|---|---|
+| Learn parses CommonMark through Markdig; Markdown's `![<alt text>](<folderPath>)` embeds an image, and for standard images "the older Markdown syntax will still work", while `:::image:::` is recommended for features such as a localization scope | [Markdown reference for Microsoft Learn](https://learn.microsoft.com/en-us/contribute/content/markdown-reference#images), updated 2024-03-05, read 2026-10-01 |
+| Content that relies on Learn's extensions is not rendered in the GitHub view of an article | The same reference, "Included Markdown files" |
+
+- **Images** in `docs/learn/` use Markdown's `![alt](relative path)`, with alt text, which both Learn and GitHub render.
+- **No Learn extension that GitHub shows as text:** no `:::` extension and no `[!div]`, `[!INCLUDE]` or `[!VIDEO]`
+  block. GitHub's alerts, such as `> [!NOTE]`, render on both. The tutorial's tabs, `# [Azure portal](#tab/portal)`,
+  stay: GitHub shows each as a heading with its content, and Learn shows them as tabs.
+- T-72 enforces both rules (tests/learn-media.test.mjs).
+- Consequence: Learn's image border, localization scope, checklist style and next-step button are not used. The
+  repository has no Learn build; the articles are read on GitHub and in the PDF and Word copies.
+
 ## How we'd know this was wrong
 
 - The gateway refuses the helper's token when Claude Code sends it through `apiKeyHelper`, or accepts
