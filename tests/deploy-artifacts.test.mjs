@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { cidrContains, configVariables } from '../infra/azure-test/lib/plan.mjs';
+import { cidrContains, configVariables, unsetConfigVariables, GATEWAY_COMMAND } from '../infra/azure-test/lib/plan.mjs';
+import { renderGatewayConfig } from '../scripts/admin/new-gateway-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const raw = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -57,6 +58,19 @@ test('config: every ${VAR} it references is set on the gateway container, secret
     assert.match(field(config, key), /^"\$\{[A-Z_]+\}"$/, `${key} is a quoted \${VAR} reference`);
   }
   assert.doesNotMatch(config.replace(/\$\{[^}]+\}/g, ''), /[A-Za-z0-9+/_-]{32,}/, 'no long literal that could be a secret');
+});
+
+// P-34 (T-94): the installer deploys an operator's own admin file through this template, and the admin-ui and budgets
+// stages need the gateway's admin API, whose write key the configuration reads as ${GATEWAY_ADMIN_WRITE_KEY}.
+test('template: every test-topology rendering, the admin API ones included, has each ${VAR} it references set on the gateway', () => {
+  const renderings = fs.readdirSync(path.join(root, 'config')).filter((f) => /^gateway\.azure-.+\.yaml$/.test(f) && f !== 'gateway.azure-private.yaml');
+  assert.ok(renderings.length >= 3, `expected the test, demo and Contoso renderings, found ${renderings}`);
+  for (const file of renderings) assert.deepEqual(unsetConfigVariables(read(`config/${file}`), template), [], file);
+  const adminApi = renderGatewayConfig({ roles: ['Gateway.Standard'], models: [{ id: 'claude-sonnet-5', deployment: 'claude-sonnet-5' }],
+    deployment: { adminApi: true } });
+  assert.ok(configVariables(adminApi).includes('GATEWAY_ADMIN_WRITE_KEY'), 'the admin block reads the write key from the environment');
+  assert.deepEqual(unsetConfigVariables(adminApi, template), []);
+  assert.equal(envOf(containers.gateway).GATEWAY_ADMIN_WRITE_KEY?.secretRef, 'admin-write-key');
 });
 
 test('config and template: both allow lists are bound to the one testerCidr parameter, which has no default', () => {
@@ -178,8 +192,8 @@ test('template: one replica, one revision, sidecar data on replica storage, conf
 
 test('template: secrets come only from secure parameters; the registry and Foundry use the one identity', () => {
   const secrets = Object.fromEntries(app.properties.configuration.secrets.map((s) => [s.name, s.value]));
-  assert.deepEqual(Object.keys(secrets).sort(), ['gateway-config', 'jwt-secret', 'oidc-client-secret', 'pg-password']);
-  for (const name of ['jwt-secret', 'oidc-client-secret', 'pg-password']) {
+  assert.deepEqual(Object.keys(secrets).sort(), ['admin-write-key', 'gateway-config', 'jwt-secret', 'oidc-client-secret', 'pg-password']);
+  for (const name of ['admin-write-key', 'jwt-secret', 'oidc-client-secret', 'pg-password']) {
     const p = /^\[parameters\('(\w+)'\)\]$/.exec(secrets[name])?.[1];
     assert.ok(p, `${name} is a parameter reference`);
     assert.equal(template.parameters[p].type.toLowerCase(), 'securestring', `${p} is a securestring`);
@@ -272,4 +286,89 @@ test('shell scripts: LF endings, strict mode, a bounded wait, and git keeps them
   const attributes = read('.gitattributes');
   assert.match(attributes, /^\*\.sh text eol=lf$/m);
   assert.match(attributes, /^Dockerfile text eol=lf$/m);
+});
+
+test('admin-ui deploy: Graph app-role grants target the resource service principal', () => {
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(deploy, /az rest --method post --url "https:\/\/graph\.microsoft\.com\/v1\.0\/servicePrincipals\/\$graphSpId\/appRoleAssignedTo"/);
+  assert.match(deploy, /principalId = \$identityPrincipalId; resourceId = \$graphSpId; appRoleId = \$role\.Id/);
+  assert.doesNotMatch(deploy, /servicePrincipals\/\$identityPrincipalId\/appRoleAssignedTo/);
+});
+
+// T-104 (ADR-0010): admin-ui's new Azure permission is Container Apps Contributor on the gateway app only, never the
+// resource group; sign-in (authConfigs) exists only when enabled, and ADMIN_UI_SIGN_IN follows it; the new Graph
+// permissions are named, and User.ReadWrite.All is granted only on request.
+test('T-104 admin-ui main.bicep: Container Apps Contributor scoped to the gateway app, the new environment, and sign-in only when enabled', () => {
+  const bicep = read('admin-ui/infra/main.bicep');
+  const block = bicep.replace(/\r\n/g, '\n').split(/^(?=resource )/m)
+    .find((b) => /^resource \w+ 'Microsoft\.Authorization\/roleAssignments@/.test(b) && b.includes("'358470bc-b998-42bd-ab17-a7e34c199c0f'"));
+  assert.ok(block, 'a role assignment of Container Apps Contributor (358470bc-...)');
+  assert.match(block, /^\s*scope: gatewayApp$/m, 'scoped to the gateway container app');
+  assert.match(bicep, /resource gatewayApp 'Microsoft\.App\/containerApps@[^']+' existing = \{ name: gatewayAppName \}/);
+  for (const name of ['GATEWAY_RESOURCE_ID', 'GATEWAY_TOPOLOGY', 'GATEWAY_ADMIN_FILE_PATH', 'ADMIN_UI_SIGN_IN']) {
+    assert.match(bicep, new RegExp(`\\{ name: '${name}', value: `), `${name} is set`);
+  }
+  assert.match(bicep, /\{ name: 'GATEWAY_RESOURCE_ID', value: gatewayApp\.id \}/);
+  assert.match(bicep, /\{ name: 'ADMIN_UI_SIGN_IN', value: enableSignIn \? 'required' : 'off' \}/);
+  assert.match(bicep, /resource auth 'Microsoft\.App\/containerApps\/authConfigs@[^']+' = if \(enableSignIn\) \{/);
+  assert.match(bicep, /unauthenticatedClientAction: 'RedirectToLoginPage'/);
+  assert.match(bicep, /excludedPaths: \[ '\/api\/health' \]/, 'probes and health checks stay unauthenticated');
+  assert.match(bicep, /@allowed\(\[ 'test', 'private' \]\)\s*\nparam gatewayTopology string/);
+});
+
+test('T-104 Deploy-AdminUi.ps1 names the new Graph permissions, grants User.ReadWrite.All only with -GrantUserWrite, and makes admin-ui an owner of the gateway app', () => {
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(deploy, /@\{ Value = 'Application\.ReadWrite\.OwnedBy'; Id = '18a4783c-866b-4cc7-a460-3d5e5662c884' \}/);
+  assert.match(deploy, /\[switch\]\$GrantUserWrite/);
+  assert.match(deploy, /if \(\$GrantUserWrite\) \{ \$NEEDED_GRAPH_ROLES \+= @\{ Value = 'User\.ReadWrite\.All'; Id = '741f803b-c850-494e-b5df-cde7c675a1ca' \} \}/);
+  assert.doesNotMatch(deploy.replace(/if \(\$GrantUserWrite\) \{[^\n]*\n/, ''), /741f803b-c850-494e-b5df-cde7c675a1ca/, 'User.ReadWrite.All appears only under -GrantUserWrite');
+  assert.match(deploy, /applications\/\$gatewayAppObjectId\/owners\/`?\$ref/);
+  assert.match(deploy, /\[switch\]\$EnableSignIn/);
+  assert.match(deploy, /gatewayAppName\s+= @\{ value = \$GatewayAppName \}/);
+  assert.match(deploy, /enableSignIn\s+= @\{ value = \[bool\]\$EnableSignIn \}/);
+});
+
+// T-108 (ADR-0011): an existing default-access assignment must not count as AdminUi.Admin, and a deployment without
+// sign-in says that the console is then limited by IP address only.
+test('T-108 Deploy-AdminUi.ps1 counts only an AdminUi.Admin assignment as "already admin", and warns when sign-in is off', () => {
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(deploy, /Where-Object \{ \$_\.principalId -eq \$userId -and \$_\.appRoleId -eq \$roleId \}/);
+  assert.match(deploy, /if \(-not \$EnableSignIn\) \{[^}]*Write-Warning [^}]*not limited to administrators/);
+});
+
+// T-114 (ADR-0012): the managed database option in the test topology's template.
+test('T-114 template: a database parameter chooses sidecar (default) or managed, and the Flexible Server exists only for managed', () => {
+  const { type, defaultValue, allowedValues } = template.parameters.database;
+  assert.deepEqual({ type, defaultValue, allowedValues }, { type: 'string', defaultValue: 'sidecar', allowedValues: ['sidecar', 'managed'] });
+  const server = template.resources.find((r) => r.type === 'Microsoft.DBforPostgreSQL/flexibleServers');
+  assert.equal(server.condition, "[equals(parameters('database'), 'managed')]");
+  assert.deepEqual(server.sku, { name: 'Standard_B1ms', tier: 'Burstable' });
+  assert.equal(server.properties.version, '16');
+  // U-105: B1ms can be refused in the app's region, so the server's region is its own parameter, and its name carries
+  // the region because ARM keeps a refused server's name in the first region for a while.
+  assert.equal(server.location, "[parameters('databaseLocation')]");
+  assert.equal(template.parameters.databaseLocation.defaultValue, "[parameters('location')]");
+  assert.equal(template.variables.pgServerName, "[concat('psql-claude-gw-', substring(variables('suffix'), 0, 8), '-', parameters('databaseLocation'))]");
+  assert.equal(server.properties.administratorLogin, 'gateway');
+  assert.equal(server.properties.administratorLoginPassword, "[parameters('postgresPassword')]");
+  assert.equal(server.properties.backup.backupRetentionDays, 35);
+  assert.equal(server.properties.network.publicNetworkAccess, 'Enabled');
+  const db = template.resources.find((r) => r.type === 'Microsoft.DBforPostgreSQL/flexibleServers/databases');
+  assert.equal(db.condition, server.condition);
+  assert.match(db.name, /'gateway'\)\]$|\/gateway'\)\]$/);
+  assert.ok(app.dependsOn.some((d) => d.includes('Microsoft.DBforPostgreSQL/flexibleServers/databases')), 'the app waits for the database');
+  assert.ok(!template.resources.some((r) => r.type === 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules'), 'rules follow the app outbound addresses, set by deploy.mjs');
+});
+
+test('T-114 template: the gateway gets GATEWAY_PG_HOST, 127.0.0.1 for the sidecar and the server name for managed, so both renderings boot', () => {
+  const host = containers.gateway.env.find((e) => e.name === 'GATEWAY_PG_HOST');
+  assert.equal(host.value, "[if(equals(parameters('database'), 'managed'), format('{0}.postgres.database.azure.com', variables('pgServerName')), '127.0.0.1')]");
+  const admin = JSON.parse(read('config/gateway-admin.azure-test.json'));
+  admin.deployment = { ...admin.deployment, database: 'managed' };
+  assert.deepEqual(unsetConfigVariables(renderGatewayConfig(admin), template), []);
+});
+
+test('T-114 the managed gateway command is the one the entrypoint execs, with the config the template mounts', () => {
+  const exec = /^\s*exec (\/usr\/local\/bin\/claude) (gateway --config \S+)$/m.exec(entrypoint);
+  assert.deepEqual(GATEWAY_COMMAND, { command: [exec[1]], args: exec[2].split(' ') });
 });

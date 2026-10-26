@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Writes the client-side payloads for a Claude apps gateway (ADR-0004, T-54) into two folders, one per way of connecting;
+// Writes the client-side payloads for a Claude apps gateway (ADR-0004, T-54) into three folders, one per way of connecting;
 // a machine takes one of them, because under forceLoginMethod Claude Code blocks an apiKeyHelper credential at startup
 // (https://code.claude.com/docs/en/authentication):
 //   login/      managed-settings.json, ClaudeCode-HKLM.reg, ClaudeCode.mobileconfig: the keys that send Claude Code's /login to
@@ -7,7 +7,12 @@
 //               HKLM policy and a macOS configuration profile, for MDM, Group Policy or an installer.
 //   developer/  every script of scripts/developer and START-HERE.txt, for the apiKeyHelper profile that needs no
 //               administrator rights.
-//   node scripts/admin/new-client-policy.mjs --gateway-url https://claude-gateway.corp.example.com --out <dir> [--fast-model <id>] [--policy-id <id>] [--force]
+//   intune/     the developer profile and Claude Code as two Win32 apps for Microsoft Intune, with INTUNE.txt
+//               (scripts/admin/intune-package.mjs).
+//   desktop/    Claude Desktop's bootstrapUrl policy as a .reg file and an Intune platform script, with DESKTOP.txt
+//               (scripts/admin/desktop-policy.mjs). The admin console serves the same files (clientPolicyFiles).
+//   node scripts/admin/new-client-policy.mjs --gateway-url https://claude-gateway.corp.example.com --out <dir> [--fast-model <id>] [--model <id>] [--policy-id <id>] [--force]
+//     [--claude-version <x.y.z> --claude-checksum <hex>]   the Claude Code release the Intune package installs
 // Exit 1, writing nothing, on a gateway URL /login would refuse, or on an output directory that is not empty without --force.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -15,6 +20,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { cidrContains } from '../../infra/azure-test/lib/plan.mjs';
+import { desktopPolicyScript, desktopRegistryFile, desktopText } from './desktop-policy.mjs';
+import { intuneFiles } from './intune-package.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 // Every script the developer folder needs: the whole scripts/developer folder, so a new runtime file cannot be left out.
@@ -95,16 +102,18 @@ export function mobileconfig(settings, policyId) {
 // START-HERE.txt of the developer folder: what the developer needs, the commands to run from the folder, the messages
 // they may meet and how to sign out, for a folder handed out without the rest of the repository (UX review, round 3).
 // CRLF, for Notepad.
-export function startHere(origin, fastModel) {
-  const fast = fastModel ? ` -FastModel ${fastModel}` : '';
+export function startHere(origin, fastModel, model) {
+  const fast = (fastModel ? ` -FastModel ${fastModel}` : '') + (model ? ` -Model ${model}` : '');
   const run = (script, args = `-GatewayUrl ${origin}`) => `   powershell -NoProfile -ExecutionPolicy Bypass -File .\\${script} ${args}`;
   return [
     `Claude Code through the Claude apps gateway at ${origin}`,
     '',
-    'This folder sets up a separate Claude Code profile on Windows. It signs in to the gateway once, then reaches it',
-    'through the apiKeyHelper setting. Your own %USERPROFILE%\\.claude settings stay as they are. It is for a machine',
-    'without the policy in the login folder: under forceLoginMethod, Claude Code blocks an apiKeyHelper credential',
-    '(https://code.claude.com/docs/en/authentication). A machine takes one of the two.',
+    'This folder connects Claude Code on this Windows machine to your organization\'s Claude gateway. It takes one command,',
+    'a browser sign-in and a confirmation (steps 1 to 4 below). Your own %USERPROFILE%\\.claude settings stay as they are.',
+    '',
+    'How it works: a separate Claude Code profile signs in to the gateway once, then reaches it through Claude Code\'s',
+    'apiKeyHelper setting. A machine with the policy in the login folder cannot use it: under forceLoginMethod, Claude Code',
+    'blocks an apiKeyHelper credential (https://code.claude.com/docs/en/authentication). A machine takes one of the two.',
     '',
     'Before you start',
     '- Windows PowerShell 5.1, which Windows includes, and Claude Code 2.1.272 or later on PATH',
@@ -116,7 +125,8 @@ export function startHere(origin, fastModel) {
     '1. Open Windows PowerShell in this folder.',
     '2. Run:',
     run('Install-ClaudeGatewayProfile.ps1', `-GatewayUrl ${origin}${fast}`),
-    '3. In the browser window that opens, confirm the code the script shows; then confirm the account it names.',
+    '3. The browser opens the gateway\'s page with a code. Check it is the code the script shows, confirm it, and sign in',
+    '   with your work account. Back in PowerShell, the script names the account that signed in: answer Y to keep it.',
     '4. Start Claude Code with the launcher the script prints:',
     '   & "$env:USERPROFILE\\.claude-apps-gateway\\claude-gateway.cmd"',
     '   A --settings argument of your own replaces the launcher\'s gateway settings. Settings of your own go in',
@@ -151,33 +161,56 @@ export function startHere(origin, fastModel) {
   ].join('\r\n');
 }
 
+/**
+ * Every client file, relative path -> content, for a gateway origin gatewayOrigin has checked: what main() writes and what
+ * the admin console's GET /api/client-kit serves (P-41).
+ */
+export function clientPolicyFiles({ origin, fastModel, model, claude, policyId = 'default' }) {
+  const settings = loginSettings(origin);
+  const files = {
+    'login/managed-settings.json': `${JSON.stringify(settings, null, 2)}\n`,
+    'login/ClaudeCode-HKLM.reg': registryFile(settings),
+    'login/ClaudeCode.mobileconfig': mobileconfig(settings, policyId),
+  };
+  for (const f of developerFiles()) files[`developer/${f}`] = fs.readFileSync(path.join(root, 'scripts', 'developer', f));
+  files['developer/START-HERE.txt'] = startHere(origin, fastModel, model);
+  for (const [rel, content] of Object.entries(intuneFiles({ origin, fastModel, model, ...(claude ? { claude } : {}) }))) files[`intune/${rel}`] = content;
+  files['desktop/ClaudeDesktop-HKLM.reg'] = desktopRegistryFile(origin);
+  files['desktop/Set-ClaudeDesktopPolicy.ps1'] = desktopPolicyScript(origin);
+  files['desktop/DESKTOP.txt'] = desktopText(origin);
+  // At the kit's root, so the downloaded kit packages itself: New-IntunePackage.ps1 -PolicyFolder . (P-41).
+  files['New-IntunePackage.ps1'] = fs.readFileSync(path.join(root, 'scripts', 'admin', 'New-IntunePackage.ps1'));
+  return files;
+}
+
 function main() {
   const { values } = parseArgs({ options: {
     'gateway-url': { type: 'string' },
     out: { type: 'string' },
-    'fast-model': { type: 'string' },
+    'fast-model': { type: 'string' }, model: { type: 'string' }, 'claude-version': { type: 'string' }, 'claude-checksum': { type: 'string' },
     'policy-id': { type: 'string', default: 'default' },
     force: { type: 'boolean', default: false },
   } });
-  if (!values['gateway-url'] || !values.out) throw new Error('pass --gateway-url <https://host> --out <dir> [--fast-model <id>] [--policy-id <id>] [--force]');
+  if (!values['gateway-url'] || !values.out) throw new Error('pass --gateway-url <https://host> --out <dir> [--fast-model <id>] [--model <id>] [--policy-id <id>] [--force]');
   const origin = gatewayOrigin(values['gateway-url']);
   const fastModel = values['fast-model'];
-  if (fastModel !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/.test(fastModel)) throw new Error(`--fast-model ${JSON.stringify(fastModel)} is not a model ID`);
+  for (const [flag, id] of [['--fast-model', fastModel], ['--model', values.model]]) {
+    if (id !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/.test(id)) throw new Error(`${flag} ${JSON.stringify(id)} is not a model ID`);
+  }
+  if (Boolean(values['claude-version']) !== Boolean(values['claude-checksum'])) throw new Error('--claude-version and --claude-checksum go together: the version and its win32-x64 checksum from the release manifest');
+  const claude = values['claude-version'] ? { version: values['claude-version'], sha256: values['claude-checksum'] } : undefined;
+  intuneFiles({ origin, claude });
   const policyId = values['policy-id'];
   if (!/^[A-Za-z0-9][A-Za-z0-9.-]{0,63}$/.test(policyId)) throw new Error(`--policy-id ${JSON.stringify(policyId)} must be letters, digits, dots and hyphens`);
   const out = path.resolve(values.out);
   if (fs.existsSync(out) && fs.readdirSync(out).length && !values.force) throw new Error(`${out} is not empty; pass --force to write into it`);
-  const settings = loginSettings(origin);
-  const login = path.join(out, 'login');
-  const developer = path.join(out, 'developer');
-  fs.mkdirSync(login, { recursive: true });
-  fs.mkdirSync(developer, { recursive: true });
-  fs.writeFileSync(path.join(login, 'managed-settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
-  fs.writeFileSync(path.join(login, 'ClaudeCode-HKLM.reg'), registryFile(settings));
-  fs.writeFileSync(path.join(login, 'ClaudeCode.mobileconfig'), mobileconfig(settings, policyId));
-  for (const f of developerFiles()) fs.copyFileSync(path.join(root, 'scripts', 'developer', f), path.join(developer, f));
-  fs.writeFileSync(path.join(developer, 'START-HERE.txt'), startHere(origin, fastModel));
-  console.log(`wrote ${out}: login\\ (managed-settings.json, ClaudeCode-HKLM.reg, ClaudeCode.mobileconfig) and developer\\.`);
+  if (!values.model) process.stderr.write('new-client-policy: written without --model, so Claude Code asks for its own default model, which a role that does not list it refuses (docs/learn/tutorial-first-install.md).\n');
+  for (const [rel, content] of Object.entries(clientPolicyFiles({ origin, fastModel, model: values.model, claude, policyId }))) {
+    const file = path.join(out, ...rel.split('/'));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  }
+  console.log(`wrote ${out}: login\\ (managed-settings.json, ClaudeCode-HKLM.reg, ClaudeCode.mobileconfig), developer\\, intune\\ (INTUNE.txt) and desktop\\ (DESKTOP.txt).`);
   console.log('A machine takes one of the two: under forceLoginMethod, Claude Code blocks the developer folder\'s apiKeyHelper credential.');
   console.log(`/login accepts ${origin} only when the name resolves to a private address, and only from a managed source on the device`);
   console.log('(https://code.claude.com/docs/en/claude-apps-gateway#prerequisites); the developer folder needs neither.');

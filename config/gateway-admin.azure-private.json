@@ -1,5 +1,5 @@
 {
-  "$comment": "Admin file for the network-restricted deployment (ADR-0005). node scripts/admin/new-gateway-config.mjs --topology private renders config/gateway.azure-private.yaml from it; pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step app deploys that file. deployment.developerCidrs: the networks developers connect from, which become access_control.allow_cidrs; the sign-in limits are per client address for each 10 minutes; storeConnectionsPerReplica is store.max_connections; desktop opts every policy in to Claude Desktop; telemetry sends client metrics to the OpenTelemetry Collector sidecar, which exports them to Application Insights (ADR-0007).",
+  "$comment": "Admin file for the network-restricted deployment (ADR-0005). node scripts/admin/new-gateway-config.mjs --topology private renders config/gateway.azure-private.yaml from it; pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step app deploys that file. deployment.developerCidrs: the networks developers connect from, which become access_control.allow_cidrs; the sign-in limits are per client address for each 10 minutes; storeConnectionsPerReplica is store.max_connections; desktop opts every policy in to Claude Desktop; telemetry sends client metrics to the OpenTelemetry Collector sidecar, which exports them to Application Insights (ADR-0007); adminApi turns on the gateway's own spend-limits admin API for the admin-ui backend (ADR-0008).",
   "roles": [
     "Gateway.Standard",
     "Gateway.Premium"
@@ -39,6 +39,7 @@
     "codeSubmissionsPerAddress": 100,
     "storeConnectionsPerReplica": 5,
     "desktop": true,
-    "telemetry": true
+    "telemetry": true,
+    "adminApi": true
   }
 }

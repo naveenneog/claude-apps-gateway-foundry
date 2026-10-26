@@ -1,0 +1,10 @@
+# Build context of admin-ui/Dockerfile, which `az acr build` uploads from the repository root
+# (admin-ui/infra/Deploy-AdminUi.ps1). The image copies only scripts/, infra/azure-test/lib, admin-ui/server and admin-ui/web.
+.git
+**/node_modules
+docs
+tests
+client-policy
+intunewin
+infra/azure-test/.state
+admin-ui-redesign-screenshots

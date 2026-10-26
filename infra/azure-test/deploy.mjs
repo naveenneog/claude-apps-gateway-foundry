@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Deploys the Claude apps gateway test environment on Azure Container Apps (docs/adr/0003-*.md).
 //   node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26 [--step all|base|entra|image|app] [--what-if]
-//     [--rotate-client-secret]
+//     [--rotate-client-secret] [--client-secret-days 1-30] [--config config/gateway.azure-test.yaml]
 // Steps: base (resource group, registry, identity, workspace, environment, role assignments), entra
 // (app registration, service principal, tester's app role), image (PostgreSQL import, gateway build),
-// app (client secret and the Container App). Secrets exist only in memory and in HTTPS request bodies;
-// the state file under .state/ holds non-secret identifiers for teardown.mjs.
+// app (client secret and the Container App, with the rendered configuration --config names). Secrets exist only in
+// memory and in HTTPS request bodies; the state file under .state/ holds non-secret identifiers for teardown.mjs.
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,8 +14,10 @@ import { parseArgs } from 'node:util';
 import { arm, graph, retry, runDeployment, validateDeployment, whatIfDeployment } from './lib/azure-rest.mjs';
 import {
   assertTesterCidr, buildApplication, deployWithPreview, deploymentBody, keyPlan, newSecret, promotionError, redirectUriFor,
-  restoredByDeployment, secretEndDate, stateFromOutputs, supersededKeys, whatIfLines, withFoundryTarget,
+  restoredByDeployment, secretDays, secretEndDate, stateFromOutputs, supersededKeys, unmanagedAppSettings, unsetConfigVariables, whatIfLines,
+  withFoundryTarget, databaseOf, databasePassword, templateForDatabase, templateForConsole, consoleConfig,
 } from './lib/plan.mjs';
+import { finishDatabase, prepareDatabase } from './lib/database.mjs';
 import { redactSecrets, registerSecret } from './lib/secrets.mjs';
 import { azJson, runAz } from './lib/spawn.mjs';
 
@@ -55,13 +57,15 @@ function options() {
       'email-domain': { type: 'string' },
       'what-if': { type: 'boolean', default: false },
       'rotate-client-secret': { type: 'boolean', default: false },
+      config: { type: 'string', default: CONFIG },
+      'database-location': { type: 'string' }, 'client-secret-days': { type: 'string' },
     },
   });
   const steps = values.step === 'all' ? ['base', 'entra', 'image', 'app'] : values.step.split(',');
   const unknown = steps.filter((s) => !['base', 'entra', 'image', 'app'].includes(s));
   if (unknown.length) throw new Error(`unknown step ${unknown.join(', ')}; use all, base, entra, image or app`);
   if (!values['tester-cidr']) throw new Error('--tester-cidr is required, for example --tester-cidr 203.0.113.0/26');
-  return { ...values, steps, testerCidr: assertTesterCidr(values['tester-cidr']) };
+  return { ...values, steps, testerCidr: assertTesterCidr(values['tester-cidr']), secretDays: secretDays(values['client-secret-days']) };
 }
 
 // The subscription and tenant in the state file must match the signed-in account, so a later run
@@ -79,13 +83,15 @@ function bindAccount(ctx) {
 const IO = { validateDeployment, whatIfDeployment, runDeployment, save: saveState };
 
 export async function deployTemplate(ctx, parameters, io = IO) {
-  const template = JSON.parse(fs.readFileSync(TEMPLATE, 'utf8'));
+  const database = parameters.database ?? 'sidecar';
+  const template = templateForConsole(templateForDatabase(JSON.parse(fs.readFileSync(TEMPLATE, 'utf8')), database), Boolean(parameters.gatewayAdminFile));
   const body = deploymentBody(template, {
     runId: ctx.state.runId,
     testerCidr: ctx.opts.testerCidr,
     foundryResourceGroup: ctx.opts['foundry-resource-group'],
     foundryAccountName: ctx.opts['foundry-account'],
     ...parameters,
+    database,
   });
   const name = parameters.deployApp ? 'claude-gw-app' : 'claude-gw-base';
   const previewOnly = ctx.opts['what-if'];
@@ -230,22 +236,32 @@ const passwordCredentials = async (ctx) => (await graph('GET', `/applications/${
 async function liveApp(ctx) {
   const appPath = `${ctx.groupPath}/providers/Microsoft.App/containerApps/${ctx.state.appName}`;
   const app = await arm('GET', `${appPath}?${APP_API}`, undefined, { ok: [200, 404] });
-  if (app.status === 404) return { secrets: {}, installedKeyId: null, readyRevision: null, readyKeyId: null };
+  if (app.status === 404) return { secrets: {}, secretNames: [], gatewayEnv: [], installedKeyId: null, readyRevision: null, readyKeyId: null };
   const listed = await arm('POST', `${appPath}/listSecrets?${APP_API}`);
   const secrets = Object.fromEntries(listed.json.value.map((s) => [s.name, registerSecret(s.value)]));
   const readyRevision = app.json.properties.latestReadyRevisionName || null;
   const revision = readyRevision ? await arm('GET', `${appPath}/revisions/${readyRevision}?${APP_API}`) : null;
-  return { secrets, installedKeyId: credentialIdOf(app.json.properties.template), readyRevision,
+  const env = app.json.properties.template?.containers?.find((c) => c.name === 'gateway')?.env ?? [];
+  const gatewayEnv = env.map((e) => e.name);
+  return { secrets, secretNames: Object.keys(secrets), gatewayEnv, configUpdatedAt: env.find((e) => e.name === 'CONFIG_UPDATED_AT')?.value, installedKeyId: credentialIdOf(app.json.properties.template), readyRevision,
     readyKeyId: credentialIdOf(revision?.json.properties.template) };
 }
 
-// Secrets for the app. The running app's JWT secret and database password are reused. keyPlan decides
+// Secrets for the app. The running app's JWT secret, database password and admin API key are reused. keyPlan decides
 // from the live app whether its client secret is reused and which of this run's secrets have no holder.
 // A new client secret is read only by the revision deployed with it. --what-if reports the plan only.
-async function appSecrets(ctx, { preview }) {
+async function appSecrets(ctx, { preview, template }) {
   const live = await liveApp(ctx);
+  // A redeploy replaces the app's whole secret and variable lists, so it would delete what someone added by hand.
+  const unmanaged = unmanagedAppSettings(live, templateForConsole(template, Boolean(live.secrets['gateway-admin-file'])));
+  if (unmanaged.length) {
+    throw new Error(`${ctx.state.appName} holds ${unmanaged.join(', ')}, which ${path.basename(TEMPLATE)} does not define, so the app step would `
+      + 'delete them. A deployment patched by hand, such as a cross-tenant Foundry credential (docs/UNKNOWNS.md, U-80), is not redeployed by '
+      + 'this step; remove those settings by hand first if they are no longer needed.');
+  }
   const jwt = registerSecret(live.secrets['jwt-secret'] || newSecret(32));
   const pg = registerSecret(live.secrets['pg-password'] || newSecret(32));
+  const admin = registerSecret(live.secrets['admin-write-key'] || newSecret(32));
   const installedSecret = live.secrets['oidc-client-secret'];
   const plan = keyPlan({ credentials: await passwordCredentials(ctx), ownName: ownKeyName(ctx), now: Date.now(),
     readyRevision: live.readyRevision, readyKeyId: live.readyKeyId,
@@ -253,14 +269,14 @@ async function appSecrets(ctx, { preview }) {
     ...(ctx.opts['rotate-client-secret'] ? { minRemainingMs: Infinity } : {}) });
   say(`client secret: ${plan.action === 'reuse' ? `reuse ${plan.keyId}` : 'add a new one'}; secrets with no holder: ${plan.removeNow.join(', ') || 'none'}`);
   if (preview) {
-    return { jwt, pg, oidc: registerSecret(installedSecret || newSecret(32)), credentialId: plan.keyId ?? 'what-if-new-credential', live, rotated: plan.action === 'rotate' };
+    return { jwt, pg, admin, oidc: registerSecret(installedSecret || newSecret(32)), credentialId: plan.keyId ?? 'what-if-new-credential', live, rotated: plan.action === 'rotate' };
   }
   await removeKeys(ctx, plan.removeNow, 'unused');
-  if (plan.action === 'reuse') return { jwt, pg, oidc: installedSecret, credentialId: plan.keyId, live, rotated: false };
-  const credential = { displayName: ownKeyName(ctx), endDateTime: secretEndDate(new Date(), 7) };
+  if (plan.action === 'reuse') return { jwt, pg, admin, oidc: installedSecret, credentialId: plan.keyId, live, rotated: false };
+  const credential = { displayName: ownKeyName(ctx), endDateTime: secretEndDate(new Date(), ctx.opts.secretDays) };
   const created = (await graph('POST', `/applications/${ctx.state.application.id}/addPassword`, { passwordCredential: credential })).json;
   say(`added client secret ${created.keyId}; it ends ${created.endDateTime}`);
-  return { jwt, pg, oidc: registerSecret(created.secretText), credentialId: created.keyId, live, rotated: true };
+  return { jwt, pg, admin, oidc: registerSecret(created.secretText), credentialId: created.keyId, live, rotated: true };
 }
 
 // Removes client secrets and confirms each is gone. A secret that remains fails the run; the next app
@@ -309,7 +325,7 @@ async function verifyReach(ctx) {
     `the gateway is ready, but this machine gets ${status} for ${url}.`,
     `A 403 means this machine's egress address is outside ${ctx.state.testerCidr} (docs/UNKNOWNS.md, U-33).`,
     'Sample the address several times (curl.exe -s https://api.ipify.org), take the narrowest range that holds every',
-    'sample, and run: node infra/azure-test/deploy.mjs --step app --tester-cidr <range>',
+    'sample, and run the installer again with -TesterCidr <range> -Steps app (docs/learn/tutorial-first-install.md)',
   ].join('\n  '));
 }
 
@@ -320,20 +336,34 @@ async function stepApp(ctx) {
   // Written by earlier versions; the live app now decides (keyPlan).
   delete ctx.state.pendingKeyId;
   delete ctx.state.passwordKeyIds;
-  const secrets = await appSecrets(ctx, { preview });
+  const template = JSON.parse(fs.readFileSync(TEMPLATE, 'utf8'));
+  const secrets = await appSecrets(ctx, { preview, template });
+  const saved = consoleConfig(secrets.live);
+  if (saved) say(`the admin console saved this gateway's configuration; the app step keeps it and does not deploy ${ctx.opts.config}`);
+  const gatewayConfigYaml = saved?.yaml ?? fs.readFileSync(path.resolve(ctx.opts.config), 'utf8');
+  const unset = unsetConfigVariables(gatewayConfigYaml, template);
+  if (unset.length) throw new Error(`${ctx.opts.config} references ${unset.map((v) => `\${${v}}`).join(', ')}, which the template does not set on the gateway container; the gateway would not boot`);
+  // ADR-0012: the rendered store decides the database, so the admin file stays the one source of the choice.
+  const database = databaseOf(gatewayConfigYaml);
+  const { databaseLocation } = await prepareDatabase({ arm, ctx, database, preview, appExists: secrets.live.secretNames.length > 0, say });
   const out = await deployTemplate(ctx, {
     deployApp: true,
+    database,
+    ...(databaseLocation ? { databaseLocation } : {}),
     gatewayImage: ctx.state.images.gateway,
     postgresImage: ctx.state.images.postgres,
     oidcClientId: ctx.state.application.appId,
     oidcCredentialId: secrets.credentialId,
     allowedEmailDomain: ctx.state.tester.emailDomain,
-    gatewayConfigYaml: fs.readFileSync(CONFIG, 'utf8'),
+    gatewayConfigYaml,
     oidcClientSecret: secrets.oidc,
     gatewayJwtSecret: secrets.jwt,
-    postgresPassword: secrets.pg,
+    postgresPassword: database === 'managed' ? databasePassword(secrets.pg) : secrets.pg,
+    gatewayAdminWriteKey: secrets.admin,
+    ...(saved ? { gatewayAdminFile: saved.adminFile, configUpdatedAt: saved.stamp } : {}),
   });
   if (!out) return;
+  if (database === 'managed') await finishDatabase({ arm, ctx, out, databaseLocation, save: () => saveState(ctx), say });
   const revision = await waitForReady(ctx, { notRevision: secrets.rotated ? secrets.live.readyRevision : null });
   const unpromoted = promotionError({ revision, after: await liveApp(ctx), keyId: secrets.credentialId });
   if (unpromoted) throw new Error(unpromoted);

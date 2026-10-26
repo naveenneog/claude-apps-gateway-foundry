@@ -12,7 +12,36 @@ The Claude apps gateway is a server that Anthropic ships inside Claude Code. It 
 OpenID Connect identity provider, applies per-group model access and spend limits, and forwards Messages API requests
 to an upstream such as Microsoft Foundry ([Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway)).
 This repository runs one on Azure Container Apps in front of a Foundry account, with Microsoft Entra ID as the
-identity provider (docs/adr/0003-azure-test-deployment-with-restricted-ingress.md:1).
+identity provider (docs/adr/0003-azure-test-deployment-with-restricted-ingress.md:1). Terms are defined in the
+[glossary](glossary.md).
+
+## Where to start
+
+Each article lists its own prerequisites; docs/learn/toc.yml:1 lists every article.
+
+| Reader | Goal | Articles, in order |
+|---|---|---|
+| Azure administrator, first install | A gateway reachable from one public address range, in one resource group, with developers onboarded by hand or with Intune | [Tutorial: install the gateway and onboard developers](tutorial-first-install.md), then [Use the admin console](how-to-use-admin-console.md) |
+| Azure administrator, a stage stopped | Doing one install stage by hand | [Install the Claude apps gateway, stage by stage](how-to-install-stage-by-stage.md) |
+| Azure administrator, production pilot | A gateway with no public endpoint, reached over VPN or ExpressRoute | [Tutorial: deploy in a network-restricted environment](tutorial-deploy-network-restricted.md), then [Connect clients](how-to-connect-clients.md) |
+| Administrator of a running gateway | Spend caps, developer access, models and chargeback | [Use the admin console](how-to-use-admin-console.md) |
+| Device-management administrator (Intune, Group Policy) | Claude Code and Claude Desktop on managed machines sign in through the gateway | For the public test gateway, [Many machines with Intune](tutorial-first-install.md#many-machines-with-intune); for the network-restricted gateway, [Connect Claude Code, VS Code and Claude Desktop](how-to-connect-clients.md) |
+| Developer | Claude Code on a Windows machine uses the gateway | [Quickstart: connect Claude Code on Windows](quickstart-developer.md) |
+| Capacity planner | Replica, database and quota figures for a rollout | [Plan capacity](concept-plan-for-scale.md), then [Load test and size the gateway](how-to-load-test-and-size.md) |
+
+## Who does what
+
+The scripts call the Azure administrator the "operator". The Entra roles are Microsoft's built-in roles
+([Microsoft Entra built-in roles](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/permissions-reference)).
+
+| Person | Does | Needs |
+|---|---|---|
+| Azure administrator (operator) | Deploys the gateway and the admin console; changes models, roles and spend caps | Owner on the subscription; an account that may register applications in Entra ID |
+| Privileged Role Administrator or Global Administrator | Grants the admin console's Microsoft Graph permissions, once | That Entra role |
+| Admin console user | Uses the admin console | The `AdminUi.Admin` app role on the console's sign-in application |
+| Device-management administrator | Delivers Claude Code and Claude Desktop policy through Intune or Group Policy | Rights on the managed devices |
+| Developer | Signs in from Claude Code | A gateway app role, `Gateway.Standard` or `Gateway.Premium`, assigned by the Azure administrator |
+| Tester | Runs the live test suites | The Azure administrator's access, and a gateway app role |
 
 ## How a request flows
 
@@ -80,6 +109,8 @@ ADR-0004 records the design of the scripts and the council's changes to it
 Anthropic's data use for Claude Code under commercial terms is in [data usage](https://code.claude.com/docs/en/data-usage).
 ## Related content
 
+- [Glossary](glossary.md)
+- [Use the admin console](how-to-use-admin-console.md)
 - [Tutorial: deploy on Azure in a network-restricted environment](tutorial-deploy-network-restricted.md)
 - [Connect Claude Code, VS Code and Claude Desktop](how-to-connect-clients.md)
 - [Plan capacity for 25,000 developers](concept-plan-for-scale.md)

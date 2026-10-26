@@ -1,0 +1,13 @@
+{
+  "$comment": "Admin file for the public demo deployment (rg-claude-gw-public-demo, no network restriction, Foundry from the <foundry-subscription> subscription's <foundry-account> account). node scripts/admin/new-gateway-config.mjs --topology test --admin config/gateway-admin.azure-test-demo.json --out config/gateway.azure-test-demo.yaml renders it. roles: the app roles in infra/azure-test/entra-app.json that the gateway admits. models: <foundry-account>' own deployment names, which differ from the usual ai-contosohub ones (claude-opus-5-5, not claude-opus-5). deployment.adminApi: true turns on the spend-limits admin API (ADR-0008) for admin-ui.",
+  "roles": ["Gateway.Standard", "Gateway.Premium"],
+  "models": [
+    { "id": "claude-opus-5", "label": "Claude Opus 5", "deployment": "claude-opus-5-5" },
+    { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "deployment": "claude-sonnet-5" }
+  ],
+  "policies": [
+    { "role": "Gateway.Premium", "models": ["claude-opus-5", "claude-sonnet-5"] },
+    { "role": "Gateway.Standard", "models": ["claude-sonnet-5"] }
+  ],
+  "deployment": { "adminApi": true }
+}

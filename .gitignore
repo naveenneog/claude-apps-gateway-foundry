@@ -6,3 +6,7 @@
 # Azure test deployment: non-secret identifiers for teardown, and live-test evidence
 infra/azure-test/.state/
 tests/live/out/
+
+# Client folders new-client-policy.mjs and New-IntunePackage.ps1 write from the repository root (docs/learn/tutorial-first-install.md)
+/client-policy/
+/intunewin/

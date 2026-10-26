@@ -1,0 +1,11 @@
+{
+  "$comment": "Fixture for tests/install-orchestrator.test.mjs (T-91): Install-ClaudeGateway.ps1 reads deployment.adminApi and budgets from this file before any stage runs; the fake stages never render it or send it anywhere.",
+  "roles": ["Gateway.Standard", "Gateway.Premium"],
+  "models": [{ "id": "claude-sonnet-5", "deployment": "claude-sonnet-5" }],
+  "policies": [
+    { "role": "Gateway.Premium", "models": ["claude-sonnet-5"] },
+    { "role": "Gateway.Standard", "models": ["claude-sonnet-5"] }
+  ],
+  "deployment": { "adminApi": true },
+  "budgets": [{ "scope": { "type": "organization" }, "amountUsd": 500, "period": "monthly" }]
+}

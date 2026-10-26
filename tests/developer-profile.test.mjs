@@ -69,10 +69,28 @@ test('T-50 writes the profile settings, a cmd-safe apiKeyHelper and a launcher, 
   // a repository's .claude/settings.json and .claude/settings.local.json.
   assert.deepEqual(pinnedOf(h), { apiKeyHelper: settings.apiKeyHelper, env: {
     ANTHROPIC_BASE_URL: 'https://gateway.contoso.example', ANTHROPIC_AUTH_TOKEN: '', ANTHROPIC_API_KEY: '', ...Object.fromEntries(PROVIDERS.map((p) => [p, ''])),
-    CLAUDE_CODE_DISABLE_FAST_MODE: '1', CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1', CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '240000' } });
+    CLAUDE_CODE_DISABLE_FAST_MODE: '1', CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK: '1', CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '240000',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5' } });
   for (const f of RUNTIME) assert.ok(fs.readFileSync(path.join(runtime, f)).equals(fs.readFileSync(path.join(scripts, f))), `${f} copied unchanged`);
   assert.ok(fs.existsSync(path.join(h.profile, 'claude-gateway.cmd')));
   untouched(h);
+});
+
+test('P-39 -Model pins the model Claude Code requests, so a role without the default model is not refused', { skip }, async (t) => {
+  const h = home(t);
+  assert.equal((await install(h, ['-GatewayUrl', 'https://gateway.contoso.example/', '-Model', 'claude-sonnet-5'])).status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(h.profile, 'settings.json'), 'utf8')).env.ANTHROPIC_MODEL, 'claude-sonnet-5');
+  assert.equal(pinnedOf(h).env.ANTHROPIC_MODEL, 'claude-sonnet-5', 'pinned too, above a repository\'s settings');
+  const plain = home(t);
+  assert.equal((await install(plain, ['-GatewayUrl', 'https://gateway.contoso.example/'])).status, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(plain.profile, 'settings.json'), 'utf8')).env.ANTHROPIC_MODEL, undefined);
+  assert.equal(pinnedOf(h).env.DISABLE_UPDATES, undefined, 'updates stay on unless asked');
+  const managed = home(t);
+  assert.equal((await install(managed, ['-GatewayUrl', 'https://gateway.contoso.example/', '-DisableUpdates'])).status, 0);
+  assert.equal(pinnedOf(managed).env.DISABLE_UPDATES, '1');
+  const bad = await install(home(t), ['-GatewayUrl', 'https://gateway.contoso.example/', '-Model', 'a b']);
+  assert.notEqual(bad.status, 0);
+  assert.match(bad.stderr + bad.stdout, /model ID/);
 });
 
 test('T-50 the PowerShell command the installer prints starts the launcher', { skip }, async (t) => {

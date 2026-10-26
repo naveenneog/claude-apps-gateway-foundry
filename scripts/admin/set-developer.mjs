@@ -2,7 +2,7 @@
 // Grants, removes and lists the gateway's app roles through Microsoft Graph (ADR-0004, T-53). The gateway admits a user
 // whose token carries one of its roles (oidc.allowed_groups on the roles claim, config/gateway.azure-test.yaml); an
 // assignment change reaches the gateway at the user's next sign-in or session refresh.
-//   node scripts/admin/set-developer.mjs --upn dev@contoso.com --role Gateway.Standard [--remove] [--admin <file>]
+//   node scripts/admin/set-developer.mjs --upn dev@contoso.com --role Gateway.Standard [--remove] [--admin <file>] [--topology test|private]
 //   node scripts/admin/set-developer.mjs --list
 // A grant needs a role that the admin file admits, the file new-gateway-config.mjs renders the gateway configuration
 // from (default config/gateway-admin.azure-test.json); the file is read and checked before any Graph request.
@@ -39,14 +39,14 @@ function roleNamed(appRoles, role) {
 }
 
 /** The roles the gateway admits, from an admin file that passes the renderer's validation (T-52). */
-export function admittedRolesFrom(adminFile, knownRoles) {
+export function admittedRolesFrom(adminFile, knownRoles, topology) {
   let admin;
   try {
     admin = JSON.parse(fs.readFileSync(adminFile, 'utf8'));
   } catch (error) {
     throw new Error(`${shownPath(adminFile)} is not readable JSON: ${error.message}`);
   }
-  const errors = adminErrors(admin, knownRoles);
+  const errors = adminErrors(admin, knownRoles, topology);
   if (errors.length) throw new Error(`${shownPath(adminFile)} has ${errors.length} problem(s):\n  ${errors.join('\n  ')}`);
   return admin.roles;
 }
@@ -96,12 +96,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     remove: { type: 'boolean', default: false },
     list: { type: 'boolean', default: false },
     admin: { type: 'string', default: DEFAULT_ADMIN },
-    'resource-group': { type: 'string', default: 'rg-claude-apps-gateway-test' },
+    'resource-group': { type: 'string', default: 'rg-claude-apps-gateway-test' }, topology: { type: 'string', default: 'test' },
   } });
-  if (!values.list && (!values.upn || !values.role)) throw new Error('pass --upn <user> --role <role> [--remove] [--admin <file>], or --list');
+  if (!values.list && (!values.upn || !values.role)) throw new Error('pass --upn <user> --role <role> [--remove] [--admin <file>] [--topology test|private], or --list');
   const appRoles = deps.appRoles ?? JSON.parse(fs.readFileSync(path.join(root, 'infra', 'azure-test', 'entra-app.json'), 'utf8')).appRoles;
   const adminFile = path.resolve(values.admin);
-  const admittedRoles = values.list ? null : admittedRolesFrom(adminFile, appRoles.map((r) => r.value));
+  const admittedRoles = values.list ? null : admittedRolesFrom(adminFile, appRoles.map((r) => r.value), values.topology);
   const readState = deps.readState ?? (await import('../../infra/azure-test/deploy.mjs')).readState;
   const graph = deps.graph ?? (await import('../../infra/azure-test/lib/azure-rest.mjs')).graph;
   const servicePrincipalId = readState(values['resource-group']).servicePrincipal?.id;

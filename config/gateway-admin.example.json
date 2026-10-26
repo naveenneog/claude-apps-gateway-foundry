@@ -1,0 +1,16 @@
+{
+  "$comment": "Example admin file for a first install. Copy it to config/gateway-admin.<name>.json, then change each models[].deployment to a Claude deployment name in your Microsoft Foundry account (az cognitiveservices account deployment list lists them). Gateway.Premium may use both models and Claude Desktop; Gateway.Standard uses Sonnet only. deployment.adminApi turns on the spend-limits API the admin console uses; deployment.database managed keeps spend and chargeback across configuration saves (ADR-0012). The budgets row caps the whole organization at 100 USD a month. Guide: docs/learn/tutorial-first-install.md.",
+  "roles": ["Gateway.Standard", "Gateway.Premium"],
+  "models": [
+    { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "deployment": "claude-sonnet-5" },
+    { "id": "claude-opus-5", "label": "Claude Opus 5", "deployment": "claude-opus-5" }
+  ],
+  "policies": [
+    { "role": "Gateway.Premium", "models": ["claude-sonnet-5", "claude-opus-5"], "desktop": true },
+    { "role": "Gateway.Standard", "models": ["claude-sonnet-5"] }
+  ],
+  "deployment": { "adminApi": true, "database": "managed" },
+  "budgets": [
+    { "scope": { "type": "organization" }, "amountUsd": 100, "period": "monthly" }
+  ]
+}

@@ -329,7 +329,7 @@ $pgPassword = ([Convert]::ToBase64String([Security.Cryptography.RandomNumberGene
 [IO.File]::WriteAllText("$work\pg-password.txt", $pgPassword)
 
 az postgres flexible-server create -g $rg -n $postgres --location $location --tier Burstable --sku-name Standard_B1ms --version 16 --storage-size 32 --zonal-resiliency Disabled --vnet $vnet --subnet snet-pg --private-dns-zone "$postgres.private.postgres.database.azure.com" --admin-user gatewayadmin --admin-password "@$work\pg-password.txt" --yes --output none
-az postgres flexible-server db create -g $rg -s $postgres -d gateway
+az postgres flexible-server db create -g $rg -s $postgres -n gateway
 ```
 
 The reply of `az postgres flexible-server create` holds the administrator password and a connection string with it
@@ -553,7 +553,7 @@ infra/azure-private/lib/Steps.App.psm1:153-158; infra/azure-private/lib/Steps.Ap
 
 The gateway reads `gateway.yaml`, rendered from the admin file `config/gateway-admin.azure-private.json`: the app
 roles it admits, the models and their Foundry deployments, a policy per role with its `availableModels`, the networks
-developers connect from, and the sign-in limits (scripts/admin/new-gateway-config.mjs:196-236). Values specific to the
+developers connect from, and the sign-in limits (scripts/admin/new-gateway-config.mjs:238-249). Values specific to the
 deployment and every secret are `${VAR}` references that the Container App sets as environment variables
 ([secret expansion](https://code.claude.com/docs/en/claude-apps-gateway-config#secret-expansion)).
 
@@ -875,7 +875,7 @@ Measured on 2026-09-29 with `pwsh -File infra/azure-private/Deploy-Gateway.ps1`,
 Verified: network isolation, name resolution, readiness, certificate trust, and Claude in Foundry answering the
 gateway's managed identity through the private endpoint from inside the gateway container (docs/UNKNOWNS.md:68). From
 the test machine, Claude Code's `/login` showed the gateway's certificate fingerprint and got its code accepted by the
-gateway, which handed the browser to Microsoft Entra ID (docs/TEST-PLAN.md:280-281). Not yet verified: the Entra
+gateway, which handed the browser to Microsoft Entra ID (docs/TEST-PLAN.md:333-333). Not yet verified: the Entra
 sign-in and a signed-in request through the gateway, which waited on the tester's multifactor authentication, and the
 VS Code extension and Claude Desktop sign-ins.
 

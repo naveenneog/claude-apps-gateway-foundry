@@ -98,6 +98,25 @@ test('T-54 the developer bundle holds the developer scripts and a START-HERE wit
   assert.ok(!prints(scriptMessages('# throw "No saved session for $origin."\nthrow "Another message for $origin."').map((m) => m.text), 'No saved session for <gateway>.'));
 });
 
+test('P-39 --model reaches the START-HERE install command and the Intune profile app; a value that is not a model ID writes nothing', (t) => {
+  const out = outDir(t);
+  assert.equal(policy(['--gateway-url', URL_OK, '--fast-model', 'claude-sonnet-5', '--model', 'claude-sonnet-5', '--out', out]).status, 0);
+  const start = read(path.join(out, 'developer'), 'START-HERE.txt').toString('utf8');
+  assert.match(start, /Install-ClaudeGatewayProfile\.ps1 -GatewayUrl \S+ -FastModel claude-sonnet-5 -Model claude-sonnet-5\r\n/);
+  assert.match(fs.readFileSync(path.join(out, 'intune', '2-gateway-profile', 'Install-Profile.ps1'), 'utf8'), / -Model 'claude-sonnet-5'/);
+  const release = outDir(t);
+  assert.equal(policy(['--gateway-url', URL_OK, '--claude-version', '2.1.290', '--claude-checksum', 'b'.repeat(64), '--out', release]).status, 0);
+  assert.match(fs.readFileSync(path.join(release, 'intune', '1-claude-code', 'Install-ClaudeCode.ps1'), 'utf8'), /2\.1\.290/);
+  assert.equal(policy(['--gateway-url', URL_OK, '--claude-version', '2.1.290', '--out', outDir(t)]).status, 1, 'a version needs its checksum');
+  assert.equal(policy(['--gateway-url', URL_OK, '--claude-checksum', 'b'.repeat(64), '--out', outDir(t)]).status, 1, 'a checksum without its version is not ignored');
+  const unpinned = policy(['--gateway-url', URL_OK, '--out', outDir(t)]);
+  assert.equal(unpinned.status, 0);
+  assert.match(unpinned.stderr, /without --model/, 'a package without a model is named');
+  const bad = outDir(t);
+  assert.equal(policy(['--gateway-url', URL_OK, '--model', 'a b', '--out', bad]).status, 1);
+  assert.ok(!fs.existsSync(bad) || fs.readdirSync(bad).length === 0, 'nothing written');
+});
+
 test('T-54 a private IPv4 literal is accepted as the gateway host', (t) => {
   assert.equal(policy(['--gateway-url', 'https://10.20.30.40:8443', '--out', outDir(t)]).status, 0);
 });

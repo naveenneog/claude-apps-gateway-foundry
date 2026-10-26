@@ -1,7 +1,7 @@
 # The Container App definition of the gateway for `az containerapp create|update --yaml` (ADR-0005). JSON is YAML, so
-# the file is written with ConvertTo-Json. Secret values are placeholders here, __JWT__, __PG__, __OIDC__ and
-# __APPINSIGHTS__; Step-App replaces them in the text it writes to a file, so no secret passes through a cmdlet. With
-# telemetry on, an OpenTelemetry Collector sidecar shares the gateway's loopback (ADR-0007).
+# the file is written with ConvertTo-Json. Secret values are placeholders here, __JWT__, __PG__, __OIDC__,
+# __APPINSIGHTS__ and __ADMINKEY__; Step-App replaces them in the text it writes to a file, so no secret passes
+# through a cmdlet. With telemetry on, an OpenTelemetry Collector sidecar shares the gateway's loopback (ADR-0007).
 Set-StrictMode -Version Latest
 
 function New-AppDefinition($c) {
@@ -60,6 +60,12 @@ function New-AppDefinition($c) {
             )
             volumeMounts = @(@{ volumeName = 'otel-config'; mountPath = '/etc/otelcol' })
         }
+    }
+    if ($c.AdminApi) {
+        # ADR-0008: GATEWAY_ADMIN_WRITE_KEY authenticates the admin-ui backend's server-to-server calls to the
+        # gateway's own spend-limits admin API (x-api-key, matched against admin.write_keys in gateway.yaml).
+        $env += @{ name = 'GATEWAY_ADMIN_WRITE_KEY'; secretRef = 'admin-write-key' }
+        $secrets += @{ name = 'admin-write-key'; value = '__ADMINKEY__' }
     }
     $probe = {
         param($type, $path, $extra)

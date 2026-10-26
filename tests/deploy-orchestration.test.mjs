@@ -72,3 +72,16 @@ test('deployTemplate with --what-if previews and writes nothing', async () => {
   assert.deepEqual(calls, ['validate', 'whatIf']);
   assert.deepEqual(ctx.state.foundryTargets, [{ resourceGroup: 'rg-a', account: 'ai-a' }]);
 });
+
+test('P-39 deployTemplate deploys the admin-ui secret and stamp only when the app step passes the saved admin file', async () => {
+  for (const [parameters, expected] of [[{}, false], [{ gatewayAdminFile: '{"roles":[]}', configUpdatedAt: '2026-10-25T10:00:00Z' }, true]]) {
+    const bodies = [];
+    const { ctx, io } = harness({ whatIf: true });
+    io.validateDeployment = async (_path, _name, body) => { bodies.push(JSON.parse(body)); };
+    await deployTemplate(ctx, { deployApp: true, ...parameters }, io);
+    const app = bodies[0].properties.template.resources.find((r) => r.type === 'Microsoft.App/containerApps');
+    assert.equal(app.properties.configuration.secrets.some((x) => x.name === 'gateway-admin-file'), expected);
+    assert.equal(app.properties.template.containers.find((c) => c.name === 'gateway').env.some((e) => e.name === 'CONFIG_UPDATED_AT'), expected);
+    assert.equal(bodies[0].properties.parameters.gatewayAdminFile?.value, parameters.gatewayAdminFile);
+  }
+});

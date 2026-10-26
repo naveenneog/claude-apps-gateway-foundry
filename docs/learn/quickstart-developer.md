@@ -43,10 +43,11 @@ The installer writes the profile, then signs in with the OAuth device authorizat
 gateway until the code is confirmed.
 
 1. Open Windows PowerShell in the folder that holds `Install-ClaudeGatewayProfile.ps1`.
-1. Run the installer with the gateway URL and the background model:
+1. Run the installer with the gateway URL, the background model and the default model, each a model the developer's
+   role allows:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-ClaudeGatewayProfile.ps1 -GatewayUrl https://gateway.contoso.com -FastModel claude-sonnet-5
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-ClaudeGatewayProfile.ps1 -GatewayUrl https://gateway.contoso.com -FastModel claude-sonnet-5 -Model claude-sonnet-5
    ```
 
    The installer prints the launcher command, then shows a sign-in code and opens the gateway's verification page in

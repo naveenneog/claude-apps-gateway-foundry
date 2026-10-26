@@ -63,6 +63,20 @@ test('T-73 private topology: each policy opts in to Claude Desktop only when the
   assert.doesNotMatch(off, /desktop/);
 });
 
+test('T-73 private topology: a policy\'s own desktop flag overrides the deployment-wide default', () => {
+  const admin = privateAdmin({ desktop: true });
+  admin.policies[1].desktop = false; // Gateway.Standard opts out even though the deployment default is on
+  const mixed = section(render(admin), 'managed');
+  assert.equal(mixed.match(/^ {6}desktop: \{\}$/gm)?.length, 1, mixed);
+  assert.match(mixed.split('Gateway.Premium')[1], /desktop: \{\}/, 'Premium keeps the deployment default');
+  assert.doesNotMatch(mixed.split('Gateway.Standard')[1] ?? mixed.split('Gateway.Premium')[0], /desktop: \{\}/, 'Standard\'s own false wins over the default');
+
+  const admin2 = privateAdmin({ desktop: false });
+  admin2.policies[1].desktop = true; // Gateway.Standard opts in even though the deployment default is off
+  const mixed2 = section(render(admin2), 'managed');
+  assert.equal(mixed2.match(/^ {6}desktop: \{\}$/gm)?.length, 1, mixed2);
+});
+
 test('T-73 the deployment block is validated: CIDRs, numbers, keys, and Claude Desktop without policies', () => {
   const errorsOf = (deployment, extra = {}) => adminErrors({ ...privateAdmin(deployment), ...extra }, ROLES);
   assert.deepEqual(errorsOf({}), []);
@@ -76,6 +90,9 @@ test('T-73 the deployment block is validated: CIDRs, numbers, keys, and Claude D
   assert.ok(errorsOf({ desktop: 'yes' }).some((e) => e.includes('desktop')));
   assert.ok(errorsOf({ colour: 'blue' }).some((e) => e.includes('colour')));
   assert.ok(errorsOf({}, { policies: undefined }).some((e) => e.includes('desktop') && e.includes('policies')), 'Claude Desktop without policies was accepted');
+  const admin = privateAdmin();
+  admin.policies[0].desktop = 'yes';
+  assert.ok(adminErrors(admin, ROLES).some((e) => e.includes('policies[0].desktop')), 'a non-boolean policy-level desktop was accepted');
 });
 
 test('T-73 --topology private needs the deployment block, an unknown topology is refused, and the checked-in private config is current', (t) => {
@@ -119,4 +136,35 @@ test('T-79 private topology: telemetry sends metrics only to the collector sidec
   assert.deepEqual(adminErrors(privateAdmin({ telemetry: true }), ROLES), []);
   assert.ok(adminErrors(privateAdmin({ telemetry: 'yes' }), ROLES).some((e) => e.startsWith('deployment.telemetry')), 'a non-boolean telemetry was accepted');
   assert.equal(JSON.parse(read('config/gateway-admin.azure-private.json')).deployment.telemetry, true, 'the deployment\'s admin file turns telemetry on');
+});
+
+test('T-80 private topology: the admin API is off by default, and on it serves spend limits with a write key and retention', () => {
+  const yaml = render(privateAdmin({ adminApi: true }));
+  // https://code.claude.com/docs/en/claude-apps-gateway-config#admin ; https://code.claude.com/docs/en/claude-apps-gateway-spend-limits
+  // write_keys/read_keys entries are objects, {id, key}, not bare strings - confirmed live 2026-10-16 (U-71: the
+  // gateway's own zod schema refused a string with "Expected object, received string" at admin.write_keys[0]) and
+  // against Anthropic's own example (github.com/anthropics/claude-code/examples/gateway/aws/gateway.yaml.example).
+  assert.equal(section(yaml, 'admin'), [
+    'admin:',
+    '  write_keys:',
+    '    - id: admin-ui',
+    '      key: "${GATEWAY_ADMIN_WRITE_KEY}"',
+    '  spend_retention_months: 13',
+    '  audit_retention_days: 365',
+  ].join('\n'));
+  for (const off of [render(privateAdmin({ adminApi: false })), render(privateAdmin()), render(privateAdmin({ adminApi: 'yes' }))]) {
+    assert.doesNotMatch(off, /^admin:/m, 'the admin API is on only when the admin file sets adminApi to true');
+  }
+  assert.deepEqual(adminErrors(privateAdmin({ adminApi: true }), ROLES), []);
+  assert.ok(adminErrors(privateAdmin({ adminApi: 'yes' }), ROLES).some((e) => e.startsWith('deployment.adminApi')), 'a non-boolean adminApi was accepted');
+});
+
+test('T-80 the admin API also allowlists the environment\'s own reserved routing ranges, which admin-ui\'s own calls arrive from', () => {
+  // admin-ui calls this gateway from within the same environment; that traffic arrives at the gateway's own
+  // access_control check from the environment's reserved ranges (measured 100.100.0.41, 2026-10-17), the same
+  // ones already trusted for X-Forwarded-For (U-64) - not from inside developerCidrs, which is the VNet's own
+  // range for developer traffic, a different address space.
+  const RESERVED = '100.100.0.0/17, 100.100.128.0/19, 100.100.160.0/19, 100.100.192.0/19';
+  assert.equal(section(render(privateAdmin({ adminApi: true })), 'access_control'), `access_control:\n  allow_cidrs: [10.40.0.0/16, 10.200.0.0/14, ${RESERVED}]`);
+  assert.equal(section(render(privateAdmin({ adminApi: false })), 'access_control'), 'access_control:\n  allow_cidrs: [10.40.0.0/16, 10.200.0.0/14]');
 });

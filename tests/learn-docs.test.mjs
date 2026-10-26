@@ -59,7 +59,7 @@ function scriptIndex() {
       else if (/\.(ps1|mjs)$/.test(e.name)) { index.set(rel, rel); if (!index.has(e.name)) index.set(e.name, rel); }
     }
   };
-  for (const dir of ['scripts', 'infra/azure-test', 'infra/azure-private', 'tests']) walk(dir);
+  for (const dir of ['scripts', 'infra/azure-test', 'infra/azure-private', 'tests', 'admin-ui']) walk(dir);
   return index;
 }
 
@@ -115,7 +115,9 @@ function codeCitationProblems(text, readLines) {
 const slug = (heading) => heading.toLowerCase().replace(/[^a-z0-9 -]/g, '').trim().replace(/\s+/g, '-');
 
 // The problems of one article; fileLines(rel) returns a repository file's line count, or null when it is missing.
-export function articleProblems({ rel, text }, { scripts, fileLines, headingsOf, readLines }) {
+export function articleProblems({ rel, text: raw }, { scripts, fileLines, headingsOf, readLines }) {
+  // Git stores the articles with LF endings (.gitattributes) and CI reads them so; a CRLF working copy is read the same way.
+  const text = raw.replace(/\r\n/g, '\n');
   const problems = [];
   const fm = frontMatter(text);
   if (!fm) problems.push('no front matter');
@@ -149,7 +151,7 @@ export function articleProblems({ rel, text }, { scripts, fileLines, headingsOf,
   problems.push(...codeCitationProblems(text, readLines));
   for (const block of text.matchAll(/```(?:powershell|bash|console|cmd|sh)\n([\s\S]*?)```/g)) {
     for (const line of block[1].split('\n')) {
-      const script = /(?:^|[\s"'\\/.])((?:(?:scripts|infra|tests)[\\/][\w.\\/-]+|[\w-]+)\.(?:ps1|mjs))(?=["'\s]|$)/.exec(line);
+      const script = /(?:^|[\s"'\\/.])((?:(?:scripts|infra|tests|admin-ui)[\\/][\w.\\/-]+|[\w-]+)\.(?:ps1|mjs))(?=["'\s]|$)/.exec(line);
       if (!script) continue;
       const name = script[1].replace(/\\/g, '/');
       // A name with a directory must be that path; a bare name, as run from a copied folder, may be any script's.
@@ -281,6 +283,100 @@ test('T-66 toc.yml lists every article, and every entry names an existing articl
   assert.deepEqual(articles().map((a) => path.posix.basename(a.rel)).filter((f) => !hrefs.includes(f)), []);
 });
 
+test('T-111 the load-test article states its measurements, a sizing table the calculator reproduces, and its limits', async () => {
+  const { size, DEFAULT_PROFILE, MEASURED } = await import('../scripts/perf/capacity.mjs');
+  const rel = 'docs/learn/how-to-load-test-and-size.md';
+  assert.ok(fs.existsSync(path.join(root, rel)), `${rel} is missing`);
+  const text = read(rel).replace(/\r\n/g, '\n');
+  assert.match(text, /2\.1\.308/, 'the article names the gateway version it measured');
+  const table = text.split('\n## ').find((s) => s.startsWith('Sizing for 500 to 25,000 developers'));
+  assert.ok(table, 'no "Sizing for 500 to 25,000 developers" section');
+  const lines = table.split('\n').filter((l) => l.startsWith('|'));
+  const header = lines[0].split('|').map((c) => c.trim());
+  const col = (name) => { const i = header.findIndex((h) => h.startsWith(name)); assert.ok(i > 0, `no ${name} column`); return i; };
+  const [dev, reps, conns] = [col('Developers'), col('Replicas'), col('PostgreSQL connections')];
+  const rows = lines.slice(2).map((l) => l.split('|').map((c) => c.trim()));
+  const n = (s) => Number(s.replace(/,/g, '').split(' ')[0]);
+  assert.deepEqual(rows.map((r) => n(r[dev])), [500, 1000, 2000, 10000, 25000]);
+  for (const r of rows) {
+    const want = size(n(r[dev]), { ...DEFAULT_PROFILE, ...MEASURED });
+    assert.equal(n(r[reps]), want.replicas.total, `${r[dev]} developers: replicas`);
+    assert.equal(n(r[conns]), want.postgres.connections, `${r[dev]} developers: PostgreSQL connections`);
+  }
+  const limits = text.split('\n## ').find((s) => s.startsWith('Limits of this test'));
+  assert.ok(limits, 'no "Limits of this test" section');
+  for (const gap of [/Foundry/, /TLS/, /ingress/i, /WSL/]) assert.match(limits, gap);
+  assert.match(read('docs/learn/concept-plan-for-scale.md'), /how-to-load-test-and-size\.md/, 'concept-plan-for-scale links the measurements');
+});
+
+// T-112: the novice-reader fixes (docs/TEST-PLAN.md). Expectations come from the sources the docs describe, the admin
+// console's navigation and the Graph permissions Deploy-AdminUi.ps1 grants, so a change there fails here.
+const section = (text, heading) => text.replace(/\r\n/g, '\n').split('\n## ').find((s) => s.startsWith(heading));
+
+test('T-112 a glossary defines the terms a new reader meets, each with a reference', () => {
+  const rel = 'docs/learn/glossary.md';
+  assert.ok(fs.existsSync(path.join(root, rel)), `${rel} is missing`);
+  const text = read(rel).replace(/\r\n/g, '\n');
+  const rows = text.split('\n').filter((l) => l.startsWith('| ') && !/^\|\s*Term\s*\|/.test(l));
+  const terms = rows.map((l) => l.split('|')[1].trim());
+  for (const term of ['Admin console', 'App role', 'Azure RBAC', '`rbac_group` scope', 'CIDR range', 'Ingress', 'Revision',
+    'Admin file', 'State file', 'Business unit', 'Chargeback', 'Microsoft Foundry', 'Spend cap']) {
+    assert.ok(terms.some((t) => t.startsWith(term)), `the glossary does not define ${term}`);
+  }
+  assert.deepEqual(rows.filter((l) => !/https:\/\/|\]\([\w./#-]+\)/.test(l)).map((l) => l.split('|')[1].trim()), [], 'rows without a reference');
+});
+
+test('T-112 the admin console article names the console and every page in its navigation', () => {
+  const html = read('admin-ui/web/index.html');
+  const brand = /class="brand-name">([^<]+)</.exec(html)[1];
+  const nav = html.slice(html.indexOf('<nav>'), html.indexOf('</nav>'));
+  const pages = [...nav.matchAll(/<span>([^<]+)<\/span>/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+  assert.ok(pages.length >= 8, `navigation parse found ${pages.length} pages`);
+  const rel = 'docs/learn/how-to-use-admin-console.md';
+  assert.ok(fs.existsSync(path.join(root, rel)), `${rel} is missing`);
+  const text = read(rel);
+  assert.ok(text.includes(brand), `the article does not name the console "${brand}"`);
+  assert.deepEqual(pages.filter((p) => !text.includes(`| ${p} |`)), [], 'pages missing from the article\'s page table');
+  assert.doesNotMatch(read('admin-ui/README.md'), /\*\*Configuration\*\*|Configuration page/, 'admin-ui README calls Access & models "Configuration"');
+});
+
+test('T-112 troubleshooting explains the admin console and ingress messages', () => {
+  const part = section(read('docs/learn/troubleshoot.md'), 'Gateway and admin console');
+  assert.ok(part, 'no "Gateway and admin console" section in troubleshoot.md');
+  for (const message of ['RBAC: access denied', 'AdminUi.Admin', 'Authorization_RequestDenied']) assert.ok(part.includes(message), `no row for ${message}`);
+  assert.match(part, /not related to Azure role/i, 'the RBAC row says the message is about IP restrictions, not Azure roles');
+});
+
+test('T-112 the overview says where each reader starts', () => {
+  const part = section(read('docs/learn/overview.md'), 'Where to start');
+  assert.ok(part, 'no "Where to start" section in overview.md');
+  for (const link of ['how-to-install-stage-by-stage.md', 'quickstart-developer.md', 'tutorial-deploy-network-restricted.md', 'how-to-use-admin-console.md']) {
+    assert.ok(part.includes(`(${link}`), `"Where to start" does not link ${link}`);
+  }
+  assert.match(read('README.md'), /docs\/learn\/overview\.md#where-to-start/, 'README.md points to "Where to start"');
+});
+
+test('T-112 the install article grants every Graph permission Deploy-AdminUi.ps1 grants, and marks the placeholder range', () => {
+  const script = read('admin-ui/infra/Deploy-AdminUi.ps1').split(/\r?\n/);
+  const ids = script.filter((l) => !l.includes('GrantUserWrite')).flatMap((l) => [...l.matchAll(/Id = '([0-9a-f-]{36})'/g)].map((m) => m[1]));
+  assert.equal(ids.length, 4, 'Deploy-AdminUi.ps1 parse');
+  const install = read('docs/learn/how-to-install-stage-by-stage.md');
+  const loop = install.split(/\r?\n/).find((l) => /foreach \(\$roleId in/.test(l)) ?? '';
+  assert.deepEqual(ids.filter((id) => !loop.includes(id)), [], 'Graph permission IDs missing from the manual grant loop');
+  // Graph takes the assignment on the resource's service principal, as Deploy-AdminUi.ps1 posts it.
+  assert.ok(script.some((l) => l.includes('servicePrincipals/$graphSpId/appRoleAssignedTo')), 'Deploy-AdminUi.ps1 parse: grant URL');
+  assert.ok(install.includes('servicePrincipals/$graphSpId/appRoleAssignedTo'), 'the manual grant posts to the identity, not to Microsoft Graph\'s service principal');
+  for (const rel of ['docs/learn/how-to-install-stage-by-stage.md', 'README.md', 'admin-ui/README.md']) {
+    assert.match(read(rel), /203\.0\.113\.0\/26[^\n]*documentation|documentation[^\n]*203\.0\.113\.0\/26/, `${rel} does not say 203.0.113.0/26 is a documentation range`);
+  }
+});
+
+test('T-112 the script reference documents Deploy-AdminUi.ps1, whose parameter rows T-66 then checks', () => {
+  const ref = section(read('docs/learn/reference-scripts.md'), 'Admin console script') ?? '';
+  assert.match(ref, /### Deploy-AdminUi\.ps1/, 'reference-scripts.md has no "Admin console script" section for Deploy-AdminUi.ps1');
+  assert.ok((ref.match(/^\| `-[A-Za-z]+` \|/gm) ?? []).length >= 10, 'the section has a parameter table');
+});
+
 test('T-66 detectors: each defect in a fixture article is reported', () => {
   const ctx = context();
   const good = '---\ntitle: T\ndescription: D\nauthor: a\nms.date: 09/28/2026\nms.topic: how-to\n---\n\n# T\n\nSee https://example.com/doc.\n';
@@ -324,11 +420,17 @@ test('T-66 detectors: each defect in a fixture article is reported', () => {
     [`${good}\n\`\`\`powershell\nnode scripts/admin/no-such-script.mjs --x\n\`\`\`\n`, /missing script/],
     [`${good}\n\`\`\`powershell\nnode scripts/admin/set-developer.mjs --user dev\n\`\`\`\n`, /does not accept --user/],
     [`${good}\n\`\`\`powershell\npowershell -NoProfile -File .\\Connect-ClaudeGateway.ps1 -GatewayUrl https://g -Browser\n\`\`\`\n`, /does not accept -Browser/],
+    // An article saved with CRLF line endings is checked as the LF copy git stores and CI reads (P-34 council round 1).
+    [`${good}\n\`\`\`powershell\nnode scripts/admin/no-such-script.mjs --x\n\`\`\`\n`.replace(/\n/g, '\r\n'), /missing script/],
+    // admin-ui's own scripts are commands an article may show too (P-34 council round 1).
+    [`${good}\n\`\`\`powershell\npwsh -File admin-ui/infra/Deploy-AdminUi.ps1 -ResourceGroup rg -Bogus x\n\`\`\`\n`, /Deploy-AdminUi\.ps1 does not accept -Bogus/],
   ];
   for (const [text, expected] of cases) {
     const found = articleProblems({ rel: 'docs/learn/x.md', text }, ctx);
     assert.ok(found.some((p) => expected.test(p)), `expected ${expected} in ${JSON.stringify(found)}`);
   }
+  assert.deepEqual(articleProblems({ rel: 'docs/learn/x.md', text: `${good}\n\`\`\`powershell\npwsh -File admin-ui/infra/Deploy-AdminUi.ps1 -ResourceGroup rg -AcrName cr\n\`\`\`\n` }, ctx), [],
+    'a command naming admin-ui/infra/Deploy-AdminUi.ps1 with options it accepts passes');
 });
 
 test('T-66 detectors: a message matches its Source line only with its parts in the order the script prints them', () => {

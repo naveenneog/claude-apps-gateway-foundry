@@ -99,8 +99,8 @@ function Step-Postgres($c) {
             '--vnet', $c.Vnet, '--subnet', 'snet-pg', '--private-dns-zone', "$($c.Postgres).private.postgres.database.azure.com",
             '--admin-user', $c.PostgresUser, '--admin-password', (New-AzSecretArgument 'pg-password' $c.Secrets.PgPassword), '--yes') | Out-Null
     }
-    if (Invoke-AzRead @('postgres', 'flexible-server', 'db', 'show', '-g', $rg, '-s', $c.Postgres, '-d', 'gateway')) { Write-AzFound 'database gateway' }
-    else { Invoke-AzChange @('postgres', 'flexible-server', 'db', 'create', '-g', $rg, '-s', $c.Postgres, '-d', 'gateway') | Out-Null }
+    if (Invoke-AzRead @('postgres', 'flexible-server', 'db', 'show', '-g', $rg, '-s', $c.Postgres, '-n', 'gateway')) { Write-AzFound 'database gateway' }
+    else { Invoke-AzChange @('postgres', 'flexible-server', 'db', 'create', '-g', $rg, '-s', $c.Postgres, '-n', 'gateway') | Out-Null }
 }
 
 function Step-Registry($c) {

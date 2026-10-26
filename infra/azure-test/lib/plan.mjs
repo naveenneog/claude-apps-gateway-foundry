@@ -88,6 +88,13 @@ export function secretEndDate(now, days = 7) {
   return new Date(now.getTime() + days * DAY_MS).toISOString();
 }
 
+// --client-secret-days as given on the command line: absent means 7.
+export function secretDays(text) {
+  if (text === undefined) return 7;
+  if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > 30) throw new Error(`--client-secret-days must be 1 to 30, got '${text}'`);
+  return Number(text);
+}
+
 export function newSecret(bytes = 32, random = cryptoRandomBytes) {
   if (!Number.isInteger(bytes) || bytes < 32) throw new Error('a secret needs at least 32 bytes of entropy');
   return Buffer.from(random(bytes)).toString('hex');
@@ -123,6 +130,104 @@ export function configVariables(yaml) {
   }
   return [...names].sort();
 }
+
+// The secret names and gateway-container variables a template's Container App defines.
+function appSettingsOf(template) {
+  const app = template.resources.find((r) => r.type === 'Microsoft.App/containerApps');
+  const gateway = app.properties.template.containers.find((c) => c.name === 'gateway');
+  return { secrets: app.properties.configuration.secrets.map((s) => s.name), env: gateway.env.map((e) => e.name) };
+}
+
+// What redeploying the template would delete from the live app: secrets and gateway variables added by hand, such as a
+// cross-tenant Foundry credential (docs/UNKNOWNS.md, U-80). live is { secretNames, gatewayEnv }.
+export function unmanagedAppSettings(live, template) {
+  const own = appSettingsOf(template);
+  return [...live.secretNames.filter((n) => !own.secrets.includes(n)).map((n) => `secret ${n}`),
+    ...live.gatewayEnv.filter((n) => !own.env.includes(n)).map((n) => `environment variable ${n}`)];
+}
+
+// ADR-0010: once admin-ui has saved, the app holds the admin file as the gateway-admin-file secret and a CONFIG_UPDATED_AT
+// stamp on the gateway container. The app step then deploys both, and the configuration the console saved, so a redeploy
+// neither deletes nor overwrites the console's work. The template is unchanged until then.
+export function templateForConsole(template, owned) {
+  if (!owned) return template;
+  const t = structuredClone(template);
+  t.parameters.gatewayAdminFile = { type: 'securestring', defaultValue: '' };
+  t.parameters.configUpdatedAt = { type: 'string', defaultValue: '' };
+  const app = t.resources.find((r) => r.type === 'Microsoft.App/containerApps');
+  app.properties.configuration.secrets.push({ name: 'gateway-admin-file', value: "[parameters('gatewayAdminFile')]" });
+  app.properties.template.containers.find((c) => c.name === 'gateway').env.push({ name: 'CONFIG_UPDATED_AT', value: "[parameters('configUpdatedAt')]" });
+  return t;
+}
+
+// What admin-ui saved on the live app ({ secrets, configUpdatedAt }), or null when the console has never saved.
+export function consoleConfig(live) {
+  const adminFile = live.secrets?.['gateway-admin-file'];
+  if (!adminFile) return null;
+  const yaml = live.secrets['gateway-config'];
+  if (!yaml) throw new Error('the app holds gateway-admin-file but no gateway-config secret; save the configuration again in the admin console');
+  return { yaml, adminFile, stamp: live.configUpdatedAt ?? '' };
+}
+
+// ADR-0012: the store a rendered configuration uses. "managed" connects to ${GATEWAY_PG_HOST}; the sidecar to 127.0.0.1.
+export function databaseOf(yaml) {
+  const url = yaml.split(/\r?\n/).map(stripComment).find((l) => /^\s*postgres_url:/.test(l)) ?? '';
+  return url.includes('${GATEWAY_PG_HOST}') ? 'managed' : 'sidecar';
+}
+
+// The gateway run directly. image/gateway-entrypoint.sh waits for the sidecar on 127.0.0.1:5432 before it execs this
+// (U-35); an app without the sidecar needs it as the container's command and args instead.
+export const GATEWAY_COMMAND = Object.freeze({ command: ['/usr/local/bin/claude'], args: ['gateway', '--config', '/etc/claude/gateway.yaml'] });
+
+// The template as deployed for one database choice. The template keeps the sidecar container literal, so that
+// appSettingsOf and unmanagedAppSettings read one shape; "managed" drops it and its EmptyDir volume.
+export function templateForDatabase(template, database) {
+  if (!['sidecar', 'managed'].includes(database)) throw new Error(`database must be sidecar or managed, not ${JSON.stringify(database)}`);
+  const out = structuredClone(template);
+  if (database === 'sidecar') return out;
+  const app = out.resources.find((r) => r.type === 'Microsoft.App/containerApps').properties.template;
+  const dropped = new Set(app.containers.filter((c) => c.name === 'postgres').flatMap((c) => (c.volumeMounts ?? []).map((m) => m.volumeName)));
+  app.containers = app.containers.filter((c) => c.name !== 'postgres');
+  app.volumes = (app.volumes ?? []).filter((v) => !dropped.has(v.name));
+  const gateway = app.containers.find((c) => c.name === 'gateway');
+  gateway.command = [...GATEWAY_COMMAND.command];
+  gateway.args = [...GATEWAY_COMMAND.args];
+  return out;
+}
+
+// The managed database's region (U-105): an explicit option, else the one recorded when the server was created, else
+// the app's. A different option from the recorded one is refused, because the template would create a second server.
+export function databaseLocationFor({ option, state, location }) {
+  if (option !== undefined && !/^[a-z0-9]+$/.test(option)) throw new Error(`--database-location takes a region name such as eastus, not ${JSON.stringify(option)}`);
+  if (option && state && option !== state) throw new Error(`the managed database is already in ${state}; a different --database-location would create a second server`);
+  return option ?? state ?? location;
+}
+
+// The Flexible Server administrator password: the app's pg-password with a capital letter added when it has none
+// (U-102). Idempotent, so the next deployment, which reads the app's secret back, keeps the same value.
+export function databasePassword(secret) {
+  if (typeof secret !== 'string' || !secret) throw new Error('the database password is empty');
+  return /[A-Z]/.test(secret) ? secret : `${secret}A`;
+}
+
+const OUTBOUND_RULE = /^aca-outbound-/;
+// Firewall rules that allow exactly the app's outbound addresses (U-101). Rules not named aca-outbound-* are left alone.
+export function firewallPlan(rules, outboundIps) {
+  if (!outboundIps?.length) throw new Error('the app reports no outbound address, so no firewall rule can be set');
+  for (const ip of outboundIps) {
+    parseIpv4(ip);
+    if (ip === '0.0.0.0') throw new Error('0.0.0.0 would allow every Azure service; refusing it');
+  }
+  const want = new Map(outboundIps.map((ip) => [`aca-outbound-${ip.replace(/\./g, '-')}`, ip]));
+  const have = new Map((rules ?? []).filter((r) => OUTBOUND_RULE.test(r.name)).map((r) => [r.name, r.properties?.startIpAddress]));
+  return {
+    add: [...want].filter(([name, ip]) => have.get(name) !== ip).map(([name, ip]) => ({ name, ip })),
+    remove: [...have.keys()].filter((name) => !want.has(name)),
+  };
+}
+
+// The ${VAR} references of a configuration that the template does not set on the gateway container.
+export const unsetConfigVariables = (yaml, template) => configVariables(yaml).filter((v) => !appSettingsOf(template).env.includes(v));
 
 export function redact(text, secrets) {
   let out = String(text);

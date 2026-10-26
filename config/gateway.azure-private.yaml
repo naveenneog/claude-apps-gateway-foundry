@@ -50,7 +50,7 @@ models:
     upstream_model: { foundry: claude-sonnet-5 }
 
 # One policy per app role, in the admin file's order; the first match applies, and its availableModels list is
-# enforced at /v1/messages. Every admitted role has a policy (T-52). desktop: {} opts the policy in to Claude Desktop.
+# enforced at /v1/messages. Every admitted role has a policy (T-52). desktop: {} opts a policy in to Claude Desktop, set on the policy itself or inherited from deployment.desktop.
 # Client metrics carry neither a session nor an account ID, so a series is per user and model (ADR-0007).
 managed:
   policies:
@@ -72,7 +72,7 @@ managed:
       desktop: {}
 
 access_control:
-  allow_cidrs: [10.40.0.0/16]
+  allow_cidrs: [10.40.0.0/16, 100.100.0.0/17, 100.100.128.0/19, 100.100.160.0/19, 100.100.192.0/19]
 
 # Per-address sign-in limits, sized for developers who share an address (P-28).
 rate_limits:
@@ -88,3 +88,12 @@ telemetry:
       metrics: true
       logs: false
       traces: false
+
+# The gateway's own spend-limits admin API, called by the admin-ui backend (ADR-0008). Not a human sign-in path:
+# GATEWAY_ADMIN_WRITE_KEY is a server-held secret, never a developer credential.
+admin:
+  write_keys:
+    - id: admin-ui
+      key: "${GATEWAY_ADMIN_WRITE_KEY}"
+  spend_retention_months: 13
+  audit_retention_days: 365

@@ -1,0 +1,16 @@
+{
+  "$comment": "Admin file for the Contoso-tenant deployment (rg-claude-gw-contoso, tenant <contoso-tenant-id>, no network restriction). The gateway and admin-ui themselves live in this tenant; Microsoft Foundry and its Claude model deployments stay in the Foundry-side tenant (<foundry-tenant-id>, subscription <foundry-subscription>, account <foundry-account>) - a different tenant, not just a different subscription, so the gateway cannot use its own managed identity for RBAC there (Azure RBAC role assignments are tenant-scoped). Instead the upstream authenticates as an Entra app registration created directly in the Foundry-side tenant (client id <foundry-access-client-id>, granted Cognitive Services User on <foundry-account> there), via AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET environment variables on the gateway container - DefaultAzureCredential's EnvironmentCredential tries these before Managed Identity, so gateway.yaml still reads auth: { use_azure_ad: true } unchanged. node scripts/admin/new-gateway-config.mjs --topology test --admin config/gateway-admin.azure-contoso.json --out config/gateway.azure-contoso.yaml renders it. roles: the app roles in infra/azure-test/entra-app.json that the gateway admits. models: <foundry-account>' own deployment names (claude-opus-5-5, not claude-opus-5). deployment.adminApi: true turns on the spend-limits admin API (ADR-0008) for admin-ui. deployment.emailClaim: preferred_username (U-81) - this tenant's only user account has no mail attribute (a personal/trial Entra tenant with no Exchange mailbox), so the id_token carries no email claim at all regardless of entra-app.json's optionalClaims request for one; the gateway reads the UPN from preferred_username instead. deployment.database: managed (2026-10-25, ADR-0012) - the gateway uses Flexible Server psql-claude-gw-<suffix>-centralus, placed in Central US because East US 2 refused Standard_B1ms and East US restricts new servers (U-105), so spend and caps survive configuration saves. policies[].desktop (2026-10-19): Gateway.Premium carries Claude Desktop, Gateway.Standard explicitly does not - each role's own terminal/VS Code/JetBrains access (the cli key) is unaffected either way, since desktop opts in to the separate /user/bootstrap endpoint only.",
+  "roles": ["Gateway.Standard", "Gateway.Premium"],
+  "models": [
+    { "id": "claude-opus-5", "label": "Claude Opus 5", "deployment": "claude-opus-5-5" },
+    { "id": "claude-sonnet-5", "label": "Claude Sonnet 5", "deployment": "claude-sonnet-5" }
+  ],
+  "policies": [
+    { "role": "Gateway.Premium", "models": ["claude-opus-5", "claude-sonnet-5"], "desktop": true },
+    { "role": "Gateway.Standard", "models": ["claude-sonnet-5"], "desktop": false }
+  ],
+  "deployment": { "adminApi": true, "emailClaim": "preferred_username", "database": "managed" },
+  "budgets": [
+    { "scope": { "type": "organization" }, "amountUsd": 500, "period": "monthly" }
+  ]
+}

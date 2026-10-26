@@ -81,6 +81,7 @@ try {
     }
     $adminDeployment = ([IO.File]::ReadAllText((Join-Path $root 'config\gateway-admin.azure-private.json')) | ConvertFrom-Json).deployment
     $telemetry = [bool]($adminDeployment.PSObject.Properties['telemetry'] -and $adminDeployment.telemetry -eq $true)
+    $adminApi = [bool]($adminDeployment.PSObject.Properties['adminApi'] -and $adminDeployment.adminApi -eq $true)
     $c = @{
         SubscriptionId = $account.id; TenantId = $account.tenantId; ResourceGroup = $ResourceGroup; Location = $Location; FoundryLocation = $FoundryLocation
         Vnet = 'vnet-claude-gw'; AddressSpace = '10.40.0.0/16'
@@ -105,6 +106,8 @@ try {
         ConfigTool = Join-Path $root 'scripts\admin\new-gateway-config.mjs'
         # ADR-0007: the admin file turns telemetry on; the collector release is pinned by its manifest list digest.
         Telemetry = $telemetry
+        # ADR-0008: the admin file turns on the gateway's own spend-limits admin API, called by the admin-ui backend.
+        AdminApi = $adminApi
         AppInsights = 'appi-claude-gw'; CollectorVersion = '0.161.0'
         CollectorDigest = 'sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1'
         CollectorConfigFile = Join-Path $root 'config\otel-collector.azure-private.json'

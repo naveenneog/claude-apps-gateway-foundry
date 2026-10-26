@@ -19,7 +19,10 @@
     "gatewayConfigYaml": { "type": "string", "defaultValue": "" },
     "oidcClientSecret": { "type": "securestring", "defaultValue": "" },
     "gatewayJwtSecret": { "type": "securestring", "defaultValue": "" },
-    "postgresPassword": { "type": "securestring", "defaultValue": "" }
+    "postgresPassword": { "type": "securestring", "defaultValue": "" },
+    "gatewayAdminWriteKey": { "type": "securestring", "defaultValue": "", "metadata": { "description": "The key a configuration with deployment.adminApi reads as GATEWAY_ADMIN_WRITE_KEY (ADR-0008); admin-ui and bootstrap-budgets.mjs read the same secret." } },
+    "databaseLocation": { "type": "string", "defaultValue": "[parameters('location')]", "metadata": { "description": "Region of the managed database (U-105: B1ms can be refused in the app's region). deploy.mjs keeps the region a server was created in." } },
+    "database": { "type": "string", "defaultValue": "sidecar", "allowedValues": ["sidecar", "managed"], "metadata": { "description": "ADR-0012: sidecar runs PostgreSQL in the app on EmptyDir, emptied by each new revision; managed uses a Flexible Server with 35-day point-in-time restore. deploy.mjs reads it from the rendered store." } }
   },
   "variables": {
     "suffix": "[uniqueString(resourceGroup().id)]",
@@ -30,6 +33,7 @@
     "appName": "ca-claude-gw",
     "acrPullName": "[guid(resourceId('Microsoft.ContainerRegistry/registries', concat('crclaudegw', substring(variables('suffix'), 0, 8))), 'id-claude-gw', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
     "foundryRoleDeployment": "claude-gw-foundry-role",
+    "pgServerName": "[concat('psql-claude-gw-', substring(variables('suffix'), 0, 8), '-', parameters('databaseLocation'))]",
     "tags": { "purpose": "claude-apps-gateway-test", "runId": "[parameters('runId')]" }
   },
   "resources": [
@@ -138,6 +142,33 @@
       }
     },
     {
+      "condition": "[equals(parameters('database'), 'managed')]",
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[variables('pgServerName')]",
+      "location": "[parameters('databaseLocation')]",
+      "tags": "[variables('tags')]",
+      "sku": { "name": "Standard_B1ms", "tier": "Burstable" },
+      "properties": {
+        "version": "16",
+        "administratorLogin": "gateway",
+        "administratorLoginPassword": "[parameters('postgresPassword')]",
+        "authConfig": { "passwordAuth": "Enabled", "activeDirectoryAuth": "Disabled" },
+        "storage": { "storageSizeGB": 32, "autoGrow": "Enabled" },
+        "backup": { "backupRetentionDays": 35, "geoRedundantBackup": "Disabled" },
+        "highAvailability": { "mode": "Disabled" },
+        "network": { "publicNetworkAccess": "Enabled" }
+      }
+    },
+    {
+      "condition": "[equals(parameters('database'), 'managed')]",
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2024-08-01",
+      "name": "[concat(variables('pgServerName'), '/gateway')]",
+      "dependsOn": ["[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('pgServerName'))]"],
+      "properties": { "charset": "UTF8", "collation": "en_US.utf8" }
+    },
+    {
       "condition": "[parameters('deployApp')]",
       "type": "Microsoft.App/containerApps",
       "apiVersion": "2024-03-01",
@@ -147,7 +178,8 @@
       "dependsOn": [
         "[resourceId('Microsoft.App/managedEnvironments', variables('environmentName'))]",
         "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), 'Microsoft.Authorization/roleAssignments', variables('acrPullName'))]",
-        "[resourceId(parameters('foundryResourceGroup'), 'Microsoft.Resources/deployments', variables('foundryRoleDeployment'))]"
+        "[resourceId(parameters('foundryResourceGroup'), 'Microsoft.Resources/deployments', variables('foundryRoleDeployment'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('pgServerName'), 'gateway')]"
       ],
       "identity": {
         "type": "UserAssigned",
@@ -177,7 +209,8 @@
             { "name": "oidc-client-secret", "value": "[parameters('oidcClientSecret')]" },
             { "name": "jwt-secret", "value": "[parameters('gatewayJwtSecret')]" },
             { "name": "pg-password", "value": "[parameters('postgresPassword')]" },
-            { "name": "gateway-config", "value": "[parameters('gatewayConfigYaml')]" }
+            { "name": "gateway-config", "value": "[parameters('gatewayConfigYaml')]" },
+            { "name": "admin-write-key", "value": "[parameters('gatewayAdminWriteKey')]" }
           ]
         },
         "template": {
@@ -197,8 +230,10 @@
                 { "name": "ALLOWED_EMAIL_DOMAIN", "value": "[parameters('allowedEmailDomain')]" },
                 { "name": "GATEWAY_JWT_SECRET", "secretRef": "jwt-secret" },
                 { "name": "GATEWAY_PG_PASSWORD", "secretRef": "pg-password" },
+                { "name": "GATEWAY_PG_HOST", "value": "[if(equals(parameters('database'), 'managed'), format('{0}.postgres.database.azure.com', variables('pgServerName')), '127.0.0.1')]" },
                 { "name": "FOUNDRY_RESOURCE", "value": "[parameters('foundryAccountName')]" },
-                { "name": "TESTER_CIDR", "value": "[parameters('testerCidr')]" }
+                { "name": "TESTER_CIDR", "value": "[parameters('testerCidr')]" },
+                { "name": "GATEWAY_ADMIN_WRITE_KEY", "secretRef": "admin-write-key" }
               ],
               "probes": [
                 { "type": "Startup", "httpGet": { "path": "/healthz", "port": 8080 }, "initialDelaySeconds": 5, "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 10 },
@@ -240,6 +275,7 @@
     "identityClientId": { "type": "string", "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').clientId]" },
     "identityPrincipalId": { "type": "string", "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('identityName')), '2023-01-31').principalId]" },
     "workspaceName": { "type": "string", "value": "[variables('workspaceName')]" },
+    "pgServerName": { "type": "string", "value": "[if(equals(parameters('database'), 'managed'), variables('pgServerName'), '')]" },
     "workspaceCustomerId": { "type": "string", "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('workspaceName')), '2023-09-01').customerId]" },
     "foundryRoleAssignmentId": { "type": "string", "value": "[reference(resourceId(parameters('foundryResourceGroup'), 'Microsoft.Resources/deployments', variables('foundryRoleDeployment')), '2022-09-01').outputs.roleAssignmentId.value]" }
   }

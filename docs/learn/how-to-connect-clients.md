@@ -9,7 +9,10 @@ ms.topic: how-to
 # Connect Claude Code, VS Code and Claude Desktop to the gateway
 
 This article configures Windows machines for the network-restricted Azure deployment, with Microsoft Entra ID sign-in
-and Microsoft Foundry upstreams. Production uses a custom domain with the organization's certificate
+and Microsoft Foundry upstreams. Its `/login` policy needs a gateway whose name resolves to private addresses
+([prerequisites](https://code.claude.com/docs/en/claude-apps-gateway#prerequisites)); for the test deployment, which
+has a public address, [Tutorial: install the gateway and onboard developers](tutorial-first-install.md#onboard-developers)
+covers the gateway profile, by hand and with Intune. Production uses a custom domain with the organization's certificate
 (docs/adr/0005-network-restricted-deployment.md:65-74); the example URL is `https://claude-gateway.corp.contoso.com`.
 A custom domain replaces the default host name in four places: a private DNS record, a certificate bound to the
 Container App ([custom domains and certificates](https://learn.microsoft.com/en-us/azure/container-apps/custom-domains-certificates)),
@@ -83,7 +86,7 @@ From the repository root, use an empty output directory with the generator in [G
 node scripts\admin\new-client-policy.mjs --gateway-url https://claude-gateway.corp.contoso.com --fast-model claude-sonnet-5 --out .\client-policy
 ```
 
-Options and outputs: scripts/admin/new-client-policy.mjs:155-179. [Windows policy locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy) define the destinations below.
+Options and outputs: scripts/admin/new-client-policy.mjs:186-216. [Windows policy locations](https://code.claude.com/docs/en/managed-settings#where-each-mechanism-stores-the-policy) define the destinations below.
 
 | Output | Purpose |
 |---|---|
@@ -92,7 +95,7 @@ Options and outputs: scripts/admin/new-client-policy.mjs:155-179. [Windows polic
 | `login\ClaudeCode.mobileconfig` | macOS configuration profile; not used on Windows |
 | `developer\` | Alternative `apiKeyHelper` profile and instructions; do not deploy alongside forced gateway login |
 
-The login payload contains these three keys (scripts/admin/new-client-policy.mjs:46):
+The login payload contains these three keys (scripts/admin/new-client-policy.mjs:53):
 
 ```json
 {
@@ -104,9 +107,9 @@ The login payload contains these three keys (scripts/admin/new-client-policy.mjs
 
 The login keys require an administrator-managed source on the machine, not user/project settings, HKCU or the gateway's `managed.policies[].cli`
 ([client-side settings](https://code.claude.com/docs/en/claude-apps-gateway-config#client-side-managed-settings)).
-`--fast-model` affects only the alternative developer folder's install command (scripts/admin/new-client-policy.mjs:97-98).
+`--fast-model` affects only the alternative developer folder's install command (scripts/admin/new-client-policy.mjs:105-106).
 
-The generator does not write Desktop's policy. Add this separate `REG_SZ` value ([Desktop value types](https://claude.com/docs/third-party/claude-desktop/configuration#value-types)):
+The generator writes Desktop's policy to its `desktop` folder: `ClaudeDesktop-HKLM.reg`, the Intune platform script `Set-ClaudeDesktopPolicy.ps1` and `DESKTOP.txt` (scripts/admin/desktop-policy.mjs:1-4); the admin console's **Settings** > **Client onboarding** downloads the same files. The policy is this separate `REG_SZ` value ([Desktop value types](https://claude.com/docs/third-party/claude-desktop/configuration#value-types)):
 
 ```cmd
 reg add "HKLM\SOFTWARE\Policies\Claude" /v bootstrapUrl /t REG_SZ /d "https://claude-gateway.corp.contoso.com/user/bootstrap" /f
@@ -161,7 +164,7 @@ The sample sets 1,000 starts and 100 submissions per address per 600 seconds, no
    ([policy check](https://code.claude.com/docs/en/managed-settings#check-that-a-policy-is-in-force), [models](https://code.claude.com/docs/en/claude-apps-gateway#whats-enforced-on-developers)).
 
 On the test machine of the [tutorial](tutorial-deploy-network-restricted.md), Claude Code 2.1.284 showed these screens
-on 2026-09-29 (docs/TEST-PLAN.md:280-281). After **Enter** on the Cloud gateway screen, it asks to trust the gateway
+on 2026-09-29 (docs/TEST-PLAN.md:333-333). After **Enter** on the Cloud gateway screen, it asks to trust the gateway
 and shows the start of the certificate's SHA-256 fingerprint:
 
 ![Screenshot of Claude Code asking Trust gateway ca-claude-gw on the environment's default domain, with the certificate fingerprint 2fbc49857fa6e209 and the choices Yes, trust this gateway and No, go back.](media/clients/login-trust-gateway.png)
@@ -207,15 +210,25 @@ The integrated terminal's `claude` command needs the standalone CLI, separate fr
 
 ## Connect Claude Desktop
 
-1. Both roles opt in with `desktop: {}` (config/gateway.azure-private.yaml:55-65); without it, `/user/bootstrap` returns 404 ([Desktop overlay](https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay)).
-2. Deploy `bootstrapUrl` directly under `HKLM\SOFTWARE\Policies\Claude`. Since Desktop 1.19367.0, HKLM policy excludes
+1. Install Claude Desktop from the official download page, [claude.com/download](https://claude.com/download), before
+   deploying any policy: a managed configuration only takes effect once the app exists on the machine, and a profile
+   delivered first means a user's first launch lands directly in the gateway sign-in, never claude.ai
+   ([recommended rollout](https://claude.com/docs/third-party/claude-desktop/mdm#recommended-rollout)). Windows
+   installs from the `.msix` package, which supports per-machine, silent provisioning for enterprise deployment; the
+   legacy `.exe` installs Claude Desktop without Cowork
+   ([installation](https://claude.com/docs/third-party/claude-desktop/installation#install-the-app)). This
+   repository does not yet automate this step the way it does for Claude Code and VS Code (`infra/azure-private/lib/Steps.Dev.psm1`
+   installs and pins those two, by checksum, but not Desktop) — track a pinned, checksummed install before relying on
+   this for a fleet rollout, the same way `New-DevVmSetupScript` already does for `claude.exe`.
+2. Both roles opt in with `desktop: {}` (config/gateway.azure-private.yaml:55-65); without it, `/user/bootstrap` returns 404 ([Desktop overlay](https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay)).
+3. Deploy `bootstrapUrl` directly under `HKLM\SOFTWARE\Policies\Claude`. Since Desktop 1.19367.0, HKLM policy excludes
    HKCU policy entirely; keep configuration in one hive
    ([registry precedence](https://claude.com/docs/third-party/claude-desktop/mdm#4-deploy-the-configuration)).
-3. Quit and reopen Desktop; configuration is read at launch ([how keys are read](https://claude.com/docs/third-party/claude-desktop/configuration#how-keys-are-read)).
-4. Complete Desktop's browser sign-in. With only `bootstrapUrl`, and no `bootstrapOidc` or header credentials,
+4. Quit and reopen Desktop; configuration is read at launch ([how keys are read](https://claude.com/docs/third-party/claude-desktop/configuration#how-keys-are-read)).
+5. Complete Desktop's browser sign-in. With only `bootstrapUrl`, and no `bootstrapOidc` or header credentials,
    Desktop uses device-code mode against the bootstrap server's origin
    ([bootstrap authentication](https://claude.com/docs/third-party/claude-desktop/bootstrap#bootstrap-server-as-authorization-server-device-code)).
-5. Cowork and Code send model requests through the gateway; CLI and Desktop sign-ins are separate. Enable Chat with
+6. Cowork and Code send model requests through the gateway; CLI and Desktop sign-ins are separate. Enable Chat with
    `chatTabEnabled: true` in Desktop policy or the `desktop` overlay (gateway 2.1.227+ for the overlay)
    ([Desktop tabs](https://code.claude.com/docs/en/claude-apps-gateway#connect-claude-desktop)).
 
@@ -249,6 +262,7 @@ The MDM-only `trustBootstrapDelivery` (Desktop 1.26832.0+) skips consent for boo
 | `Administrator policy requires a Cloud gateway sign-in` | API environment variables, an `apiKeyHelper`, or a saved Console API key conflict with policy | Clear those credentials; use `claude auth logout` for a saved key, then start `claude` and run `/login` | [Error reference](https://code.claude.com/docs/en/errors#administrator-policy-requires-a-cloud-gateway-sign-in) |
 | Proxy refusal, or certificate pin checks skipped | An HTTPS proxy is on the CLI's gateway route | Add `claude-gateway.corp.contoso.com` to `NO_PROXY` and relaunch; retain other bypass entries | [Proxy and pinning](https://code.claude.com/docs/en/claude-apps-gateway#connect-developers) |
 | Gateway rejects requests from a corporate subnet | The source is outside `access_control.allow_cidrs` | Have the operator configure the admitted developer networks; the sample admits `10.40.0.0/16` | config/gateway.azure-private.yaml:68 |
+| `/readyz` times out or never answers 200 from inside the VNet, and sign-in or inference hangs | The gateway's console logs show `postgres connection closed: Connection timeout after 10s`; PostgreSQL Flexible Server was stopped (a cost-saving pause, the same as a deallocated VM) | Have the operator check `az postgres flexible-server show --query state`, then `az postgres flexible-server start`; re-run `-Step verify` | infra/azure-private/lib/Steps.Dev.psm1 (`Step-Verify`, T-16) |
 
 ## Related content
 

@@ -32,6 +32,14 @@
 .PARAMETER GatewayUrl
     The gateway origin, for example https://gateway.contoso.com. http is accepted for a loopback address only.
 
+.PARAMETER Model
+The model Claude Code requests by default (ANTHROPIC_MODEL). Set it to a model the developer's role allows: without
+it Claude Code requests its own default, which the gateway refuses with HTTP 400 for a role that does not list it.
+
+.PARAMETER DisableUpdates
+Writes DISABLE_UPDATES=1, for a Claude Code release an administrator distributes, such as the Intune package
+(https://code.claude.com/docs/en/env-vars).
+
 .PARAMETER FastModel
     A model the gateway serves, used for Claude Code's background tasks (ANTHROPIC_DEFAULT_HAIKU_MODEL). Set it when
     the gateway serves no Haiku model.
@@ -62,6 +70,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$GatewayUrl,
     [string]$FastModel,
+    [string]$Model, [switch]$DisableUpdates,
     [string]$ProfileDir,
     [string]$ClaudePath,
     [switch]$ReplaceGateway,
@@ -172,7 +181,7 @@ function Get-LauncherText([string]$Claude) {
 try {
     Import-Module (Join-Path $PSScriptRoot 'ClaudeGateway.psm1') -DisableNameChecking
     $origin = ConvertTo-GatewayOrigin -Url $GatewayUrl
-    if ($FastModel -and $FastModel -notmatch '^[A-Za-z0-9._:@/-]+$') { throw "The model ID '$FastModel' has characters that model IDs do not use." }
+    foreach ($id in @($FastModel, $Model)) { if ($id -and $id -notmatch '^[A-Za-z0-9._:@/-]+$') { throw "The model ID '$id' has characters that model IDs do not use." } }
 
     $userHome = $env:USERPROFILE
     if (-not $ProfileDir) { $ProfileDir = Join-Path $userHome '.claude-apps-gateway' }
@@ -224,8 +233,9 @@ try {
     $pinnedEnv['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
     $pinnedEnv['CLAUDE_CODE_API_KEY_HELPER_TTL_MS'] = '240000'
     $settings['apiKeyHelper'] = $apiKeyHelper
+    # The models are pinned too, so a repository's settings cannot select one the developer's role refuses.
+    if ($FastModel) { $pinnedEnv['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = $FastModel }; if ($Model) { $pinnedEnv['ANTHROPIC_MODEL'] = $Model }; if ($DisableUpdates) { $pinnedEnv['DISABLE_UPDATES'] = '1' }
     foreach ($name in $pinnedEnv.Keys) { $envBlock[$name] = $pinnedEnv[$name] }
-    if ($FastModel) { $envBlock['ANTHROPIC_DEFAULT_HAIKU_MODEL'] = $FastModel }
 
     New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
     $utf8 = New-Object Text.UTF8Encoding -ArgumentList $false

@@ -140,6 +140,15 @@ test('T-53 the CLI grants only a role that the --admin file admits, and refuses 
   assert.equal(writes(granted).length, 1);
 });
 
+test('P-39 a grant with the example admin file works: the test topology is the default, and --topology private applies its rules', async () => {
+  const example = new URL('../config/gateway-admin.example.json', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  const granted = fakeGraph();
+  assert.match(await main(['--upn', 'dev@contoso.com', '--role', 'Gateway.Standard', '--admin', example], deps(granted)), /Gateway\.Standard granted to Dev One/);
+  const privateRun = fakeGraph();
+  await assert.rejects(main(['--upn', 'dev@contoso.com', '--role', 'Gateway.Standard', '--admin', example, '--topology', 'private'], deps(privateRun)), /developerCidrs/);
+  assert.deepEqual(privateRun.calls, []);
+});
+
 test('T-53 the CLI stops on an admin file that fails the renderer\'s validation, before any Graph request', async (t) => {
   for (const admin of ['{ "roles": [', { roles: [], models }, { roles: ['Gateway.Unknown'], models }]) {
     const graph = fakeGraph();

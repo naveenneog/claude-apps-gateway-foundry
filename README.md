@@ -1,8 +1,36 @@
 # claude-apps-gateway-foundry
 
-Plan, test plan and decision record for running Claude Code against Claude models in Microsoft Foundry
-through Anthropic's self-hosted [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway),
-compared with the existing Azure API Management (APIM) gateway.
+This repository deploys and operates Anthropic's self-hosted
+[Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway) on Azure. The gateway is a server that
+signs developers in with Microsoft Entra ID and forwards Claude Code's requests to Claude models in Microsoft
+Foundry, so no model key reaches a developer machine. It includes an admin console, titled
+**Claude apps gateway - Foundry**, for spend caps, developer access, models and chargeback ([admin-ui](admin-ui)).
+The starting point for each kind of reader is
+[docs/learn/overview.md, Where to start](docs/learn/overview.md#where-to-start); terms are defined in the
+[glossary](docs/learn/glossary.md). The rest of the repository holds the plan, test plan and decision records,
+including the comparison with the Azure API Management (APIM) gateway.
+
+## Start here
+
+| Goal | Read | Time |
+|---|---|---|
+| Install the gateway on Azure for the first time, then onboard developers by hand or with Microsoft Intune | [Tutorial: install the gateway and onboard developers](docs/learn/tutorial-first-install.md) | One sitting; the install itself took about eight minutes on 2026-10-21 (docs/TEST-PLAN.md, T-91) |
+| Use Claude Code on a Windows machine through a gateway someone else installed | [Quickstart: connect Claude Code on Windows](docs/learn/quickstart-developer.md) | A few minutes |
+| Run a gateway that is already installed: models, access, budgets, chargeback | [Use the admin console](docs/learn/how-to-use-admin-console.md) | — |
+| Install a gateway with no public address, reached over VPN or ExpressRoute | [Tutorial: deploy in a network-restricted environment](docs/learn/tutorial-deploy-network-restricted.md) | Longer: it builds the network too |
+| Look up a term | [Glossary](docs/learn/glossary.md) | — |
+
+The first tutorial needs Owner on an Azure subscription, a Microsoft Foundry account with Claude models deployed, and
+PowerShell 7, Node.js 22, the Azure CLI and Git on the machine that runs it; its "Before you begin" section lists each
+role and why. Developer machines run Windows, and the gateway accepts connections from one public address range. Not
+yet tested: an Intune assignment in a real tenant, and Claude Desktop through this gateway (docs/UNKNOWNS.md, U-106 and
+U-107).
+
+The tutorial and the pages it links are all a first install needs. The sections below describe how the repository is
+built and tested, using its record identifiers: ADR-n decisions, P-n work packets, T-n tests and U-n unknowns
+([glossary](docs/learn/glossary.md#repository-records)).
+
+## About this repository
 
 [docs/learn/tutorial-deploy-network-restricted.md](docs/learn/tutorial-deploy-network-restricted.md) deploys the
 gateway on Azure in a network-restricted environment, step by step in the Azure portal, the Azure CLI and a script
@@ -12,7 +40,8 @@ test scripts (ADR-0004) are documented in Microsoft Learn format in [docs/learn/
 [docs/STATUS.md](docs/STATUS.md) names the packet in progress.
 
 Addresses in 203.0.113.0/24, the [RFC 5737](https://www.rfc-editor.org/rfc/rfc5737) documentation range, stand for
-the tester's public egress range, and `<environment>` stands for the generated environment name of the public test
+the tester's public egress range: 203.0.113.0/26 in the commands below is a documentation range that admits nobody,
+and a deployment uses the range its administrator connects from. `<environment>` stands for the generated environment name of the public test
 deployment (ADR-0003). The network-restricted example deployment keeps its generated names, such as
 `politebush-4e216865`, because its screenshots show them; its environment has no public address (ADR-0006).
 
@@ -23,19 +52,20 @@ deployment (ADR-0003). The network-restricted example deployment keeps its gener
 | [docs/adr/0002-pilot-claude-apps-gateway-alongside-apim.md](docs/adr/0002-pilot-claude-apps-gateway-alongside-apim.md) | Options A1, A2, B, C and D; cited comparison against APIM; proposed decision, pilot design decisions and P-16 gates |
 | [docs/GATEWAY-COMPARISON.md](docs/GATEWAY-COMPARISON.md) | APIM gateway accelerator (route A, at `ea31a5f`) against the Claude apps gateway (route B): comparison, advantages and disadvantages, requirements each route meets, measured results, where the sources differ |
 | [docs/adr/0003-azure-test-deployment-with-restricted-ingress.md](docs/adr/0003-azure-test-deployment-with-restricted-ingress.md) | M1 test topology: Container Apps, PostgreSQL sidecar, allow lists on the tester's range, admission by app role, what stays untested |
-| [docs/learn/](docs/learn/overview.md) | Microsoft Learn articles: overview, developer quickstart, network-restricted deployment tutorial, client connection how-to, capacity plan for 25,000 developers, admin how-to, inference tests how-to, script reference, troubleshooting, `toc.yml` |
+| [docs/learn/](docs/learn/overview.md) | Microsoft Learn articles: overview, developer quickstart, network-restricted deployment tutorial, client connection how-to, capacity plan for 25,000 developers, load test and sizing how-to, admin how-to, admin console how-to, stage-by-stage install how-to, users, groups and budgets how-to, inference tests how-to, script reference, glossary, troubleshooting, `toc.yml` |
 | [docs/export/](docs/export) | PDF and Word copies of the network-restricted deployment tutorial, the client connection how-to and the capacity plan, for readers without the repository |
 | [infra/azure-private/](infra/azure-private) | Network-restricted deployment (ADR-0005): `Deploy-Gateway.ps1` and its step modules, telemetry included (ADR-0007) |
 | [docs/adr/0004-operator-and-developer-tooling.md](docs/adr/0004-operator-and-developer-tooling.md) | Admin and developer tooling: the `apiKeyHelper` developer profile, DPAPI session, admin scripts, and the council's amendments |
 | [scripts/developer/](scripts/developer) | Windows PowerShell 5.1 scripts: `Install-ClaudeGatewayProfile.ps1`, `Connect-ClaudeGateway.ps1`, `Get-ClaudeGatewayToken.ps1`, `Disconnect-ClaudeGateway.ps1` |
-| [scripts/admin/](scripts/admin) | Node.js scripts: `new-gateway-config.mjs`, `set-developer.mjs`, `new-client-policy.mjs` |
+| [scripts/admin/](scripts/admin) | Node.js scripts: `new-gateway-config.mjs`, `set-developer.mjs`, `new-client-policy.mjs`, `bootstrap-budgets.mjs` |
+| [admin-ui/](admin-ui) | Web UI for gateway configuration, app roles, spend limits, chargeback and client onboarding (ADR-0010): framework-free `node:http` backend, vanilla JS frontend, Bicep deployment into the gateway's own environment |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Routes A, A2, B, C and D; draft `gateway.yaml`; client managed settings; controls on route C's APIM API |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Milestones M0–M5 and packets P-0–P-32 with acceptance criteria |
-| [docs/TEST-PLAN.md](docs/TEST-PLAN.md) | Test cases T-01–T-79 with negative checks, parity scenarios PS-1–PS-11, and results |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Milestones and work packets P-0 onwards with acceptance criteria |
+| [docs/TEST-PLAN.md](docs/TEST-PLAN.md) | Test cases T-01 onwards with negative checks, parity scenarios PS-1–PS-11, and results |
 | [docs/UNKNOWNS.md](docs/UNKNOWNS.md) | Known unknowns, their state and evidence |
 | [docs/STATUS.md](docs/STATUS.md) | Active packet and handover notes |
 | [docs/CHARTER.md](docs/CHARTER.md) | Goals, non-goals, constraints, definition of done |
-| [infra/azure-test/](infra/azure-test) | Test deployment on Azure Container Apps (ADR-0003): `deploy.mjs`, `teardown.mjs`, ARM template `gateway-test.json`, Entra app manifest, image files (`Dockerfile`, `verify-release.sh`, entrypoint) |
+| [infra/azure-test/](infra/azure-test) | Test deployment on Azure Container Apps (ADR-0003): `Install-ClaudeGateway.ps1`, the stage-based installer (ADR-0009), `deploy.mjs`, `teardown.mjs`, ARM template `gateway-test.json`, Entra app manifest, image files (`Dockerfile`, `verify-release.sh`, entrypoint) |
 | [config/gateway.azure-test.yaml](config/gateway.azure-test.yaml) | Gateway config for the test deployment; every secret and environment value is a `${VAR}` reference |
 | [config/otel-collector.azure-private.json](config/otel-collector.azure-private.json) | OpenTelemetry Collector config of the network-restricted deployment: one metrics pipeline from the gateway's loopback to Application Insights (ADR-0007) |
 | [tests/live/](tests/live) | Live checks against the deployed gateway, and `inference-suite.mjs` (T-51, T-55 to T-65); results in `docs/TEST-PLAN.md` |
@@ -57,12 +87,16 @@ pwsh -File tests/mutate-deploy.ps1           # mutations of the deployment files
 node .ironclad/gate.mjs --stage packet       # Ironclad definition of done
 ```
 
-The test deployment (ADR-0003) needs Azure CLI signed in with Owner on the subscription:
+The test deployment (ADR-0003) needs Azure CLI signed in with Owner on the subscription. The installer commands, with
+the values each needs, are in [docs/learn/tutorial-first-install.md](docs/learn/tutorial-first-install.md); the commands
+below are the underlying scripts, and `203.0.113.0/26` in them is a documentation range that admits nobody, replaced by
+the range the administrator connects from:
 
 ```powershell
-node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26 --what-if    # preview: validation and what-if, writes nothing
-node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26              # deploy or update; each ARM deployment runs what-if first
-node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26 --step app --rotate-client-secret   # new client secret; the old key goes once the new revision is ready
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr 203.0.113.0/26 -FoundryResourceGroup <rg> -FoundryAccount <account> -SignInAdmins <upn> -Plan   # every stage, in order
+node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26 --resource-group rg-claude-gw-eval --foundry-resource-group <rg> --foundry-account <account> --what-if    # preview: validation and what-if, writes nothing
+node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26 --resource-group rg-claude-gw-eval --foundry-resource-group <rg> --foundry-account <account>              # deploy or update; each ARM deployment runs what-if first
+node infra/azure-test/deploy.mjs --tester-cidr 203.0.113.0/26 --resource-group rg-claude-gw-eval --foundry-resource-group <rg> --foundry-account <account> --step app --config config/gateway.azure-eval.yaml --rotate-client-secret   # new client secret; the old key goes once the new revision is ready
 node tests/live/gateway-live.mjs --check entra,surface,outside,boot,build   # checks without a browser
 node tests/live/gateway-live.mjs --check signin,inference,cli,refresh,stream,longstream,upstream,denied
 node infra/azure-test/teardown.mjs --dry-run                                # then without --dry-run

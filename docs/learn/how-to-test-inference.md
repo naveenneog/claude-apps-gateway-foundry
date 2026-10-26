@@ -8,8 +8,16 @@ ms.topic: how-to
 
 # Run the inference tests through the Claude apps gateway
 
-`tests/live/inference-suite.mjs` sends requests through the gateway with the developer profile's session. After each
-check it matches every successful `/v1/messages` answer from the gateway to a request that carried the session token
+This article is for a tester who confirms that a deployed gateway serves the Messages API features Claude Code uses
+([Messages API](https://platform.claude.com/docs/en/api/messages)). `tests/live/inference-suite.mjs` sends requests through the
+gateway with the developer profile's session, checks each answer, and confirms the gateway logged it. Each check ends
+PASS, FAIL or BLOCKED; the suite exits 0, 1 or 2 (tests/live/inference-suite.mjs:123). The run needs one browser
+sign-in, and its prerequisites depend on which checks are selected.
+
+## How the suite verifies answers
+
+After each
+check the suite matches every successful `/v1/messages` answer from the gateway to a request that carried the session token
 to the gateway's `inference` audit event by `x-request-id`, whether a check sent the request or Claude Code sent it
 through the loopback capture relay, and requires the event to name the tester, the model and the Foundry upstream
 (tests/live/inference-runner.mjs:58-70, tests/live/inference-runner.mjs:101-111, tests/live/inference-runner.mjs:122-125).
@@ -85,8 +93,8 @@ Tokens are registered with the redaction list and do not appear in it.
 ## Results so far
 
 The runs of 2026-09-28 are in docs/TEST-PLAN.md, sections "Results — inference suite, 2026-09-28"
-(docs/TEST-PLAN.md:159), "Results — inference suite, 2026-09-28, after council round 2" (docs/TEST-PLAN.md:204) and
-"Results — inference suite, 2026-09-28, live, after sign-in" (docs/TEST-PLAN.md:215):
+(docs/TEST-PLAN.md:205), "Results — inference suite, 2026-09-28, after council round 2" (docs/TEST-PLAN.md:250) and
+"Results — inference suite, 2026-09-28, live, after sign-in" (docs/TEST-PLAN.md:261):
 
 - Before a browser sign-in, every gateway check was BLOCKED. The APIM route
   (`https://apim-claude-gw-fzgql9.azure-api.net/claude`), `claude-sonnet-5`, 20 streamed prompts, had no failures:

@@ -55,7 +55,7 @@ node scripts\admin\new-gateway-config.mjs --topology private
 node scripts\admin\new-gateway-config.mjs --topology private --check
 ```
 
-Options are defined at scripts/admin/new-gateway-config.mjs:239-245; rendering does not deploy the change.
+Options are defined at scripts/admin/new-gateway-config.mjs:243-248; rendering does not deploy the change.
 `device_verify` protects against guessing codes: raise it only as needed. Lower limits after rollout if refresh tokens
 enable silent renewal; otherwise size for repeated sign-ins
 ([large rollouts](https://code.claude.com/docs/en/claude-apps-gateway-deploy#large-rollouts)).
@@ -71,7 +71,7 @@ Estimate the busiest sustained interval, then test bursts. Count model requests,
 | Requests per active developer | 2 per minute | Model request count divided by active developers and interval duration |
 | Average time a request stays open | 30 seconds | Time from request start to stream end in the client/load generator |
 
-Audit fields are recorded in docs/UNKNOWNS.md:55; the target is 150, below 256 upstream slots (infra/azure-private/Deploy-Gateway.ps1:45-46).
+Audit fields are recorded in docs/UNKNOWNS.md:55; the target is 150, below 256 upstream slots (infra/azure-private/Deploy-Gateway.ps1:47-48).
 
 ```text
 request rate = 25,000 × 20% × 2 = 10,000 requests/minute
@@ -88,7 +88,8 @@ A stream occupies an upstream slot until it ends; queued bodies also consume mem
 `BUN_CONFIG_MAX_HTTP_REQUESTS` (1–65,535). Measure CPU/memory before raising it, and keep the HTTP target below it
 ([upstream concurrency](https://code.claude.com/docs/en/claude-apps-gateway-deploy#concurrent-upstream-requests)).
 
-CPU/memory capacity remains unmeasured (U-58, docs/UNKNOWNS.md:69). `-Cpu`/`-Memory` request 1 vCPU/2 GiB (infra/azure-private/Deploy-Gateway.ps1:47-48).
+Gateway 2.1.308 in `load_test_mode` used 26 ms of CPU per request and at most about 1 core per process; memory peaked at
+295 MB with 2,000 open requests ([Load test and size](how-to-load-test-and-size.md)). `-Cpu`/`-Memory` request 1 vCPU/2 GiB (infra/azure-private/Deploy-Gateway.ps1:49-50).
 Use [`load_test_mode`](https://code.claude.com/docs/en/claude-apps-gateway-config#load_test_mode) on an isolated deployment with its own empty database,
 never a gateway developers use. It returns canned replies without Foundry; `x-load-test-user` simulates distinct users.
 The mode needs gateway 2.1.282+; CPU estimates before 2.1.283 are substantially lower. Even newer estimates omit upstream encryption.
@@ -175,7 +176,7 @@ in order on 429, 5xx, 401, 403, 404 or timeouts. Every request tries the first u
 It waits up to one hour for Foundry to start responding: this is not load balancing or guaranteed prompt failover.
 
 **Example fragment:** separate accounts with deployment mappings. The renderer currently emits a single account
-(scripts/admin/new-gateway-config.mjs:150-154); adopting this needs a renderer change, not an edit to generated output.
+(scripts/admin/new-gateway-config.mjs:171-175); adopting this needs a renderer change, not an edit to generated output.
 
 ```yaml
 upstreams:
@@ -240,6 +241,31 @@ and plan rotations: each prompts developers again. Put the hostname in `NO_PROXY
 Measured on 2026-09-29: the internal default domain served a publicly trusted, platform-managed certificate from
 `Microsoft TLS G2 RSA CA OCSP 02`, valid 2026-09-28 to 2027-01-06 (100 days); the platform controls rotation (U-56, docs/UNKNOWNS.md:67).
 
+## Infrastructure cost
+
+Prices below are Azure Retail Prices, `eastus2`, checked 2026-10-19 ([Retail Prices API](https://prices.azure.com/api/retail/prices)),
+scaled for 1,000 developers using this article's own replica formula. This is infrastructure only: Foundry's
+per-token price for the models themselves is a separate, usage-based cost, not yet researched in this repository
+(U-9, docs/UNKNOWNS.md).
+
+At 1,000 developers, 20% active at peak and 2 requests/minute each resolves to 200 open requests, which fits inside
+the `-ConcurrentRequests: 150`-per-replica target at 2 replicas — the same floor this article recommends regardless
+of scale, so this rollout size needs no more than the minimum.
+
+| Component | Monthly cost | Basis |
+|---|---|---|
+| Gateway Container Apps, 2 replicas (1 vCPU / 2 GiB each) | $53–$158 | Consumption plan vCPU $0.000024/s active, $0.000003/s idle; memory $0.000003/GiB-s either state. Range spans mostly-idle to fully-active; no measured utilization at this scale to narrow it |
+| Requests | under $1 | $0.40/million, at an assumed 1.5 million requests/month |
+| PostgreSQL, Burstable B2S, no HA | $65 | $0.07/hour compute; ~40 peak connections (2 × 2 replicas × 10/replica) fit B2S's 414-connection ceiling with room to spare |
+| PostgreSQL, General Purpose D2ds_v5, zone-redundant HA | $277 | $0.18/hour × 2 (primary and standby); this article's blanket "production" guidance below, written for 25,000 developers, where General Purpose is needed for connection capacity, not for this rollout's actual connection count |
+| Log Analytics ingestion | $14–$55 | $2.76/GB beyond the free allowance, at an estimated 5–20 GB/month of audit and telemetry data; not measured at this scale |
+| Container Registry, Basic | $5 | $0.17/day |
+| admin-ui | cents | Scales to zero between admin sessions (docs/adr/0008-admin-ui-for-the-gateway-spend-limits-api.md) |
+| Bastion, Developer SKU | $0 | Free SKU; a jump VM costs only while running |
+
+Total: roughly $140 to $500 a month, the PostgreSQL HA choice being the largest single swing. Choose Burstable
+over General Purpose when connection count, not availability, is the deciding factor, as it is at this scale.
+
 ## Rollout waves
 
 Load test first, then pilot all clients and corporate/VPN paths against real Foundry. Size waves from sign-in concentration
@@ -260,6 +286,7 @@ Pause expansion when queueing, failures or quota use exceed the pilot's agreed o
 - [Gateway overview](overview.md)
 - [Configure models, roles and developer access](how-to-admin-configure.md)
 - [Run the inference tests](how-to-test-inference.md)
+- [Load test the gateway and size it for 500 to 25,000 developers](how-to-load-test-and-size.md)
 - [Script reference](reference-scripts.md)
 - [Deploy a network-restricted gateway](tutorial-deploy-network-restricted.md)
 - [Connect Claude Code, VS Code and Claude Desktop](how-to-connect-clients.md)

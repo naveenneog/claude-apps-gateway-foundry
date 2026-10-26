@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   addressInside, assertTesterCidr, buildApplication, cidrContains, configVariables, coveringCidr, deployWithPreview, deploymentBody,
-  foundryAccountIds, keyPlan, newSecret, promotionError, redact, redirectUriFor, secretEndDate, supersededKeys, whatIfLines, withFoundryTarget,
+  foundryAccountIds, keyPlan, newSecret, promotionError, redact, redirectUriFor, secretDays, secretEndDate, supersededKeys, unmanagedAppSettings,
+  unsetConfigVariables, whatIfLines, withFoundryTarget, databaseOf, templateForDatabase, templateForConsole, consoleConfig, databasePassword, firewallPlan, databaseLocationFor,
 } from '../infra/azure-test/lib/plan.mjs';
 
 test('tester CIDR: accepts a public, aligned range of /24 or narrower and normalises it', () => {
@@ -83,6 +85,13 @@ test('secret end date is 7 days out by default and never beyond the tenant limit
   assert.throws(() => secretEndDate(now, 0), /1 to 30/);
 });
 
+test('P-39 --client-secret-days is a whole number of days from 1 to 30, 7 when absent', () => {
+  assert.equal(secretDays(undefined), 7);
+  assert.equal(secretDays('30'), 30);
+  assert.equal(secretDays('1'), 1);
+  for (const bad of ['0', '31', '7.5', 'seven', '', ' 7', '1e1']) assert.throws(() => secretDays(bad), /1 to 30/, bad);
+});
+
 test('newSecret draws at least 32 random bytes and encodes them as hex', () => {
   const a = newSecret();
   assert.match(a, /^[0-9a-f]{64}$/);
@@ -109,6 +118,31 @@ test('configVariables lists ${VAR} references outside comments, and skips ${file
     '  pair: "${A}-${B}"',
   ].join('\n');
   assert.deepEqual(configVariables(yaml), ['A', 'B', 'GATEWAY_PUBLIC_URL']);
+});
+
+// A Container App template with the given secret names and gateway variables, and a sidecar with one of its own.
+const appTemplate = (secrets, env) => ({ resources: [{ type: 'Microsoft.App/containerApps', properties: {
+  configuration: { secrets: secrets.map((name) => ({ name, value: `[parameters('${name}')]` })) },
+  template: { containers: [{ name: 'gateway', env: env.map((name) => ({ name })) }, { name: 'postgres', env: [{ name: 'POSTGRES_USER' }] }] },
+} }] });
+
+test('unmanagedAppSettings names each live secret and gateway variable a redeploy of the template would delete (P-34, U-80)', () => {
+  const template = appTemplate(['jwt-secret', 'gateway-config'], ['GATEWAY_JWT_SECRET', 'AZURE_CLIENT_ID']);
+  assert.deepEqual(unmanagedAppSettings({ secretNames: ['jwt-secret', 'gateway-config'], gatewayEnv: ['AZURE_CLIENT_ID', 'GATEWAY_JWT_SECRET'] }, template), []);
+  assert.deepEqual(unmanagedAppSettings({ secretNames: [], gatewayEnv: [] }, template), [], 'an app that does not exist yet holds nothing');
+  // The Contoso deployment's hand-added cross-tenant Foundry credential (docs/UNKNOWNS.md, U-80).
+  assert.deepEqual(unmanagedAppSettings({ secretNames: ['jwt-secret', 'azure-client-secret-crosstenant'],
+    gatewayEnv: ['AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET'] }, template),
+  ['secret azure-client-secret-crosstenant', 'environment variable AZURE_TENANT_ID', 'environment variable AZURE_CLIENT_SECRET']);
+  assert.deepEqual(unmanagedAppSettings({ secretNames: [], gatewayEnv: ['POSTGRES_USER'] }, template), ['environment variable POSTGRES_USER'],
+    'a variable only the sidecar defines is not the gateway container\'s');
+});
+
+test('unsetConfigVariables names each ${VAR} a configuration references that the template does not set on the gateway (P-34)', () => {
+  const template = appTemplate([], ['GATEWAY_PUBLIC_URL', 'GATEWAY_JWT_SECRET']);
+  assert.deepEqual(unsetConfigVariables('a: "${GATEWAY_PUBLIC_URL}"\nb: "${GATEWAY_JWT_SECRET}"\n', template), []);
+  assert.deepEqual(unsetConfigVariables('a: "${GATEWAY_PUBLIC_URL}"\nkey: "${GATEWAY_ADMIN_WRITE_KEY}"  # ${COMMENTED}\nc: "${POSTGRES_USER}"\n', template),
+    ['GATEWAY_ADMIN_WRITE_KEY', 'POSTGRES_USER']);
 });
 
 test('redact replaces every secret of 8 or more characters, wherever it appears', () => {
@@ -238,4 +272,99 @@ test('whatIfLines lists each changed property path of a Modify, never a value, a
     '            Delete  tags.note',
   ]);
   assert.ok(!whatIfLines(changes).join('\n').includes('secret-looking'));
+});
+
+// T-114 (ADR-0012): the deploy script's choices for the test topology's database.
+const sidecarYaml = 'store:\n  postgres_url: postgres://gateway@127.0.0.1:5432/gateway\n';
+const managedYaml = 'store:\n  postgres_url: "postgres://gateway@${GATEWAY_PG_HOST}:5432/gateway?sslmode=require"\n';
+
+test('T-114 databaseOf reads the choice from the rendered store, so the admin file stays the one source', () => {
+  assert.equal(databaseOf(sidecarYaml), 'sidecar');
+  assert.equal(databaseOf(managedYaml), 'managed');
+  assert.equal(databaseOf('# postgres_url: "postgres://gateway@${GATEWAY_PG_HOST}"\n' + sidecarYaml), 'sidecar', 'a comment does not count');
+});
+
+const miniTemplate = () => ({ resources: [
+  { type: 'Microsoft.DBforPostgreSQL/flexibleServers', name: 's' },
+  { type: 'Microsoft.App/containerApps', properties: { template: {
+    containers: [
+      { name: 'gateway', volumeMounts: [{ volumeName: 'gateway-config', mountPath: '/etc/claude' }] },
+      { name: 'postgres', volumeMounts: [{ volumeName: 'pgdata', mountPath: '/var/lib/postgresql/data' }] },
+    ],
+    volumes: [{ name: 'gateway-config', storageType: 'Secret' }, { name: 'pgdata', storageType: 'EmptyDir' }],
+  } } },
+] });
+
+test('P-39 after an admin-ui save, the app step keeps the gateway-admin-file secret and CONFIG_UPDATED_AT instead of refusing (ADR-0010)', () => {
+  const t = JSON.parse(fs.readFileSync(new URL('../infra/azure-test/gateway-test.json', import.meta.url), 'utf8'));
+  const before = structuredClone(t);
+  assert.deepEqual(templateForConsole(t, false), before);
+  const owned = templateForConsole(t, true);
+  assert.deepEqual(t, before, 'the input template is not changed');
+  const saved = { secretNames: ['jwt-secret', 'gateway-config', 'gateway-admin-file'], gatewayEnv: ['AZURE_CLIENT_ID', 'CONFIG_UPDATED_AT'] };
+  assert.deepEqual(unmanagedAppSettings(saved, t), ['secret gateway-admin-file', 'environment variable CONFIG_UPDATED_AT'], 'the template alone would delete them');
+  assert.deepEqual(unmanagedAppSettings(saved, owned), []);
+  assert.deepEqual(unmanagedAppSettings({ ...saved, secretNames: [...saved.secretNames, 'azure-client-secret-crosstenant'] }, owned),
+    ['secret azure-client-secret-crosstenant'], 'a secret added by hand is still refused');
+  assert.equal(owned.parameters.gatewayAdminFile.type, 'securestring');
+  assert.equal(owned.parameters.configUpdatedAt.type, 'string');
+});
+
+test('P-39 consoleConfig deploys the configuration admin-ui saved, not the local file, once the app holds the admin file', () => {
+  assert.equal(consoleConfig({ secrets: { 'gateway-config': 'a: 1\n' } }), null, 'never saved from the console');
+  assert.equal(consoleConfig({ secrets: {} }), null, 'an app that does not exist yet');
+  assert.deepEqual(consoleConfig({ secrets: { 'gateway-config': 'models: []\n', 'gateway-admin-file': '{"roles":[]}' }, configUpdatedAt: '2026-10-25T10:00:00Z' }),
+    { yaml: 'models: []\n', adminFile: '{"roles":[]}', stamp: '2026-10-25T10:00:00Z' });
+  assert.deepEqual(consoleConfig({ secrets: { 'gateway-config': 'x', 'gateway-admin-file': '{}' } }).stamp, '');
+  assert.throws(() => consoleConfig({ secrets: { 'gateway-admin-file': '{}' } }), /gateway-config/);
+});
+
+test('T-114 templateForDatabase removes the postgres container and pgdata volume for "managed" only, without changing its input', () => {
+  const t = miniTemplate();
+  const before = structuredClone(t);
+  assert.deepEqual(templateForDatabase(t, 'sidecar'), before);
+  const managed = templateForDatabase(t, 'managed');
+  assert.deepEqual(t, before, 'the input is not changed');
+  const app = managed.resources.find((r) => r.type === 'Microsoft.App/containerApps').properties.template;
+  assert.deepEqual(app.containers.map((c) => c.name), ['gateway']);
+  assert.deepEqual(app.volumes.map((v) => v.name), ['gateway-config']);
+  // The image's entrypoint waits for the sidecar on 127.0.0.1:5432 (U-35); with no sidecar it would never start the
+  // gateway, so the managed app runs the gateway directly (found live on Contoso, revision ca-claude-gw--0000008).
+  assert.deepEqual(app.containers[0].command, ['/usr/local/bin/claude']);
+  assert.deepEqual(app.containers[0].args, ['gateway', '--config', '/etc/claude/gateway.yaml']);
+  assert.equal(templateForDatabase(t, 'sidecar').resources[1].properties.template.containers[0].command, undefined, 'the sidecar keeps the entrypoint');
+  assert.throws(() => templateForDatabase(t, 'azurefiles'), /sidecar or managed/);
+});
+
+test('T-114 databaseLocationFor keeps the region a server was created in, so a later deployment never moves it', () => {
+  assert.equal(databaseLocationFor({ option: undefined, state: undefined, location: 'eastus2' }), 'eastus2');
+  assert.equal(databaseLocationFor({ option: 'eastus', state: undefined, location: 'eastus2' }), 'eastus');
+  assert.equal(databaseLocationFor({ option: undefined, state: 'eastus', location: 'eastus2' }), 'eastus');
+  assert.throws(() => databaseLocationFor({ option: 'centralus', state: 'eastus', location: 'eastus2' }), /already in eastus/);
+  assert.throws(() => databaseLocationFor({ option: 'East US', state: undefined, location: 'eastus2' }), /region name/);
+});
+
+test('T-114 databasePassword adds a capital letter only when there is none, so a second deployment keeps the same password', () => {
+  const hex = 'a'.repeat(32) + '0123456789abcdef'.repeat(2);
+  const once = databasePassword(hex);
+  assert.equal(once, `${hex}A`);
+  assert.equal(databasePassword(once), once);
+  assert.equal(databasePassword('Abc123'), 'Abc123');
+  assert.throws(() => databasePassword(''), /empty/);
+});
+
+test('T-114 firewallPlan adds a rule per outbound address and removes only stale aca-outbound rules', () => {
+  const rules = [
+    { name: 'aca-outbound-192-0-2-10', properties: { startIpAddress: '192.0.2.10', endIpAddress: '192.0.2.10' } },
+    { name: 'aca-outbound-203-0-113-1', properties: { startIpAddress: '203.0.113.1', endIpAddress: '203.0.113.1' } },
+    { name: 'someone-else', properties: { startIpAddress: '192.0.2.4', endIpAddress: '192.0.2.4' } },
+  ];
+  assert.deepEqual(firewallPlan(rules, ['192.0.2.10', '198.51.100.9']), {
+    add: [{ name: 'aca-outbound-198-51-100-9', ip: '198.51.100.9' }],
+    remove: ['aca-outbound-203-0-113-1'],
+  });
+  assert.deepEqual(firewallPlan(rules.slice(0, 1), ['192.0.2.10']), { add: [], remove: [] });
+  assert.throws(() => firewallPlan([], []), /no outbound address/);
+  assert.throws(() => firewallPlan([], ['10.0.0.300']), /not an IPv4 address/);
+  assert.throws(() => firewallPlan([], ['0.0.0.0']), /0\.0\.0\.0/, 'never the allow-all-Azure rule');
 });

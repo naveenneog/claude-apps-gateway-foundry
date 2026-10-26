@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { desktopBlock, desktopErrors, desktopOfFor } from './desktop-settings.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/;
@@ -24,13 +25,15 @@ function scalar(value) {
 }
 const flow = (values) => `[${values.map(scalar).join(', ')}]`;
 
-// Every problem in the admin file, as messages that name the field; empty when it can be rendered.
-export function adminErrors(admin, knownRoles) {
+// Every problem in the admin file, as messages that name the field; empty when it can be rendered. topology
+// defaults to 'private' so every existing caller (set-developer.mjs, admin-ui/server.mjs), which validates only
+// the private admin file, is unaffected; the CLI below passes its own --topology.
+export function adminErrors(admin, knownRoles, topology = 'private') {
   if (admin === null || typeof admin !== 'object' || Array.isArray(admin)) return ['the admin file must hold a JSON object'];
   const errors = [];
   // A misspelt "policies" would otherwise drop every policy without a word.
   for (const key of Object.keys(admin)) {
-    if (!['$comment', 'roles', 'models', 'policies', 'deployment'].includes(key)) errors.push(`${key}: unknown key; the keys are roles, models, policies, deployment and $comment`);
+    if (!['$comment', 'roles', 'models', 'policies', 'deployment', 'budgets'].includes(key)) errors.push(`${key}: unknown key; the keys are roles, models, policies, deployment, budgets and $comment`);
   }
   const list = (value, field) => {
     if (Array.isArray(value)) return value;
@@ -71,11 +74,55 @@ export function adminErrors(admin, knownRoles) {
       const allowed = list(policy.models, `policies[${i}].models`);
       if (!allowed.length) errors.push(`policies[${i}].models: list at least one model`);
       for (const id of allowed) if (!ids.has(id)) errors.push(`policies[${i}].models: ${id} is not in models`);
+      // desktop opts a policy in or out of Claude Desktop over deployment.desktop's default; desktopSettings: its tab switches.
+      errors.push(...desktopErrors(policy, i));
     });
     // A role without a policy would match none, and a user who matches no policy may use every model.
     for (const role of roles) if (!covered.has(role)) errors.push(`policies: the admitted role ${role} has no policy`);
   }
-  if (admin.deployment !== undefined) errors.push(...deploymentErrors(admin.deployment, admin.policies));
+  if (admin.deployment !== undefined) errors.push(...deploymentErrors(admin.deployment, admin.policies, topology));
+  if (admin.budgets !== undefined) errors.push(...budgetErrors(admin.budgets, roles));
+  return errors;
+}
+
+const PERIODS = ['daily', 'weekly', 'monthly'];
+
+// The admin API's own {scope, amount, period} shape (https://code.claude.com/docs/en/claude-apps-gateway-spend-limits),
+// amount given as amountUsd (a human amount, matching admin-ui's own form field) rather than the wire's whole-cent
+// string, since this file is operator-edited and a bare "amount" could read as either unit - a wrong guess here is a
+// 100x error on a live spend cap, not a cosmetic one. Never rendered into gateway.yaml: the gateway's own docs are
+// explicit that caps are set through the admin API only, so this is validated here (the admin file's one schema
+// authority) and read only by scripts/admin/bootstrap-budgets.mjs.
+function budgetErrors(budgets, roles) {
+  if (!Array.isArray(budgets)) return ['budgets: must be a list'];
+  const errors = [];
+  const seen = new Set();
+  budgets.forEach((budget, i) => {
+    if (budget === null || typeof budget !== 'object' || Array.isArray(budget)) { errors.push(`budgets[${i}]: must be an object with scope, amountUsd and period`); return; }
+    const scope = budget.scope;
+    let scopeKey = null;
+    if (scope === null || typeof scope !== 'object' || Array.isArray(scope) || !['user', 'rbac_group', 'organization'].includes(scope.type)) {
+      errors.push(`budgets[${i}].scope.type: must be user, rbac_group or organization`);
+    } else if (scope.type === 'organization') {
+      scopeKey = 'organization';
+    } else if (scope.type === 'rbac_group') {
+      if (typeof scope.rbac_group_id !== 'string' || !scope.rbac_group_id) errors.push(`budgets[${i}].scope.rbac_group_id: required for scope.type rbac_group`);
+      else if (!roles.includes(scope.rbac_group_id)) errors.push(`budgets[${i}].scope.rbac_group_id: ${scope.rbac_group_id} is not in roles`);
+      scopeKey = `rbac_group:${scope.rbac_group_id}`;
+    } else if (scope.type === 'user') {
+      if (typeof scope.user_id !== 'string' || !scope.user_id) errors.push(`budgets[${i}].scope.user_id: required for scope.type user`);
+      scopeKey = `user:${scope.user_id}`;
+    }
+    if (!PERIODS.includes(budget.period)) errors.push(`budgets[${i}].period: must be ${PERIODS.join(', ')}`);
+    if (budget.amountUsd !== null && !(typeof budget.amountUsd === 'number' && Number.isFinite(budget.amountUsd) && budget.amountUsd >= 0)) {
+      errors.push(`budgets[${i}].amountUsd: must be null (unlimited) or a non-negative number`);
+    }
+    if (scopeKey && PERIODS.includes(budget.period)) {
+      const key = `${scopeKey}/${budget.period}`;
+      if (seen.has(key)) errors.push(`budgets: ${scopeKey} has two ${budget.period} caps`);
+      seen.add(key);
+    }
+  });
   return errors;
 }
 
@@ -90,15 +137,25 @@ function cidrProblem(value) {
 
 // The network-restricted topology's settings (ADR-0005): the developer networks the gateway admits, the per-address
 // sign-in limits for a large rollout (https://code.claude.com/docs/en/claude-apps-gateway-deploy#large-rollouts), the
-// PostgreSQL connections per replica, and the Claude Desktop opt-in, which needs a policy to carry it.
-function deploymentErrors(deployment, policies) {
+// PostgreSQL connections per replica, the Claude Desktop opt-in, which needs a policy to carry it, and the admin API
+// opt-in for spend limits (ADR-0008). developerCidrs is private-only: the test topology's allow list is
+// --tester-cidr on the deploy script's own command line, not the admin file.
+function deploymentErrors(deployment, policies, topology) {
   if (deployment === null || typeof deployment !== 'object' || Array.isArray(deployment)) return ['deployment: must be an object'];
   const errors = [];
-  const keys = ['developerCidrs', 'signInsPerAddress', 'codeSubmissionsPerAddress', 'storeConnectionsPerReplica', 'desktop', 'telemetry'];
+  const keys = ['developerCidrs', 'signInsPerAddress', 'codeSubmissionsPerAddress', 'storeConnectionsPerReplica', 'desktop', 'telemetry', 'adminApi', 'emailClaim', 'database'];
   for (const key of Object.keys(deployment)) if (!keys.includes(key)) errors.push(`deployment.${key}: unknown key; the keys are ${keys.join(', ')}`);
-  const cidrs = deployment.developerCidrs;
-  if (!Array.isArray(cidrs) || !cidrs.length) errors.push('deployment.developerCidrs: list at least one IPv4 block that developers connect from');
-  else for (const cidr of cidrs) { const problem = cidrProblem(cidr); if (problem) errors.push(`deployment.developerCidrs: ${JSON.stringify(cidr)} ${problem}`); }
+  // ADR-0012: the test topology runs PostgreSQL in the app ("sidecar") or on a Flexible Server ("managed"); the
+  // private topology always uses its own Flexible Server with private access (ADR-0005).
+  const databases = topology === 'private' ? ['managed'] : ['sidecar', 'managed'];
+  if (deployment.database !== undefined && !databases.includes(deployment.database)) {
+    errors.push(`deployment.database: must be ${databases.map((d) => JSON.stringify(d)).join(' or ')} on the ${topology} topology`);
+  }
+  if (topology === 'private') {
+    const cidrs = deployment.developerCidrs;
+    if (!Array.isArray(cidrs) || !cidrs.length) errors.push('deployment.developerCidrs: list at least one IPv4 block that developers connect from');
+    else for (const cidr of cidrs) { const problem = cidrProblem(cidr); if (problem) errors.push(`deployment.developerCidrs: ${JSON.stringify(cidr)} ${problem}`); }
+  }
   for (const [key, max] of [['signInsPerAddress', 100000], ['codeSubmissionsPerAddress', 100000], ['storeConnectionsPerReplica', 1000]]) {
     const value = deployment[key];
     if (value !== undefined && !(Number.isInteger(value) && value >= 1 && value <= max)) errors.push(`deployment.${key}: must be a whole number from 1 to ${max}`);
@@ -106,6 +163,8 @@ function deploymentErrors(deployment, policies) {
   if (deployment.desktop !== undefined && typeof deployment.desktop !== 'boolean') errors.push('deployment.desktop: must be true or false');
   if (deployment.desktop === true && !Array.isArray(policies)) errors.push('deployment.desktop: the Claude Desktop opt-in is set on each policy, so list policies');
   if (deployment.telemetry !== undefined && typeof deployment.telemetry !== 'boolean') errors.push('deployment.telemetry: must be true or false');
+  if (deployment.emailClaim !== undefined && (typeof deployment.emailClaim !== 'string' || !deployment.emailClaim)) errors.push('deployment.emailClaim: must be a non-empty string');
+  if (deployment.adminApi !== undefined && typeof deployment.adminApi !== 'boolean') errors.push('deployment.adminApi: must be true or false');
   return errors;
 }
 
@@ -118,14 +177,18 @@ export function renderGatewayConfig(admin, { adminFile = 'config/gateway-admin.a
   if (!['test', 'private'].includes(topology)) throw new Error(`--topology must be test or private, not ${JSON.stringify(topology)}`);
   const deployment = admin.deployment;
   if (topology === 'private' && !deployment) throw new Error('the private topology needs the admin file\'s deployment block, with developerCidrs (ADR-0005)');
-  const desktop = topology === 'private' && deployment.desktop === true;
+  // desktopOf: a policy's own desktop (true or false) always wins; absent, it falls back to deployment.desktop's
+  // default. Independent of topology - Claude Desktop sign-in is a gateway managed-policy feature, not a network
+  // concern, so the test topology opts in exactly as the private one does (U-81-adjacent, found live 2026-10-19).
+  const desktopOf = desktopOfFor(deployment);
+  const anyDesktop = (admin.policies ?? []).some(desktopOf);
   const telemetry = topology === 'private' && deployment.telemetry === true;
   const models = admin.models.flatMap((m) => [`  - id: ${scalar(m.id)}`, ...(m.label ? [`    label: ${scalar(m.label)}`] : []),
     `    upstream_model: { foundry: ${scalar(m.deployment)} }`]);
   const managed = admin.policies ? [
     '',
     '# One policy per app role, in the admin file\'s order; the first match applies, and its availableModels list is',
-    `# enforced at /v1/messages. Every admitted role has a policy (T-52).${desktop ? ' desktop: {} opts the policy in to Claude Desktop.' : ''}`,
+    `# enforced at /v1/messages. Every admitted role has a policy (T-52).${anyDesktop ? ' desktop: {} opts a policy in to Claude Desktop, set on the policy itself or inherited from deployment.desktop.' : ''}`,
     ...(telemetry ? ['# Client metrics carry neither a session nor an account ID, so a series is per user and model (ADR-0007).'] : []),
     'managed:',
     '  policies:',
@@ -134,7 +197,7 @@ export function renderGatewayConfig(admin, { adminFile = 'config/gateway-admin.a
       // gateway refuses with 400 (https://code.claude.com/docs/en/claude-apps-gateway#whats-enforced-on-developers).
       '        enforceAvailableModels: true',
       ...(telemetry ? ['        env:', '          OTEL_METRICS_INCLUDE_SESSION_ID: "false"', '          OTEL_METRICS_INCLUDE_ACCOUNT_UUID: "false"'] : []),
-      ...(desktop ? ['      desktop: {}'] : [])]),
+      ...(desktopOf(p) ? desktopBlock(p.desktopSettings) : [])]),
   ] : [];
   const oidc = [
     'oidc:',
@@ -142,6 +205,9 @@ export function renderGatewayConfig(admin, { adminFile = 'config/gateway-admin.a
     '  client_id: "${OIDC_CLIENT_ID}"',
     '  client_secret: "${OIDC_CLIENT_SECRET}"',
     '  allowed_email_domains: ["${ALLOWED_EMAIL_DOMAIN}"]',
+    // For an IdP account with no mail attribute, whose id_token carries no email claim at all (U-81): read the
+    // email from another claim instead, typically preferred_username (the UPN) for Entra.
+    ...(deployment?.emailClaim ? [`  email_claim: ${scalar(deployment.emailClaim)}`] : []),
     '  # The app does not require assignment (U-39), so admission is by app role in the roles claim.',
     '  groups_claim: roles',
     `  allowed_groups: ${flow(admin.roles)}`,
@@ -183,15 +249,41 @@ export function renderGatewayConfig(admin, { adminFile = 'config/gateway-admin.a
     '',
     ...oidc,
     'store:',
-    '  postgres_url: postgres://gateway@127.0.0.1:5432/gateway',
+    ...(admin.deployment?.database === 'managed'
+      ? ['  postgres_url: "postgres://gateway@${GATEWAY_PG_HOST}:5432/gateway?sslmode=require"']
+      : ['  postgres_url: postgres://gateway@127.0.0.1:5432/gateway']),
     '  password: "${GATEWAY_PG_PASSWORD}"',
     '  connect_timeout_seconds: 10',
     '',
     ...upstreamAndModels,
     'access_control:',
-    '  allow_cidrs: ["${TESTER_CIDR}"]',
+    // The reserved range admin-ui's own server-to-server calls arrive from within this same Consumption-topology
+    // environment (measured 100.100.0.190, 2026-10-17): the environment's own internal routing, not the tester's
+    // address, so it is additional to, not instead of, the tester CIDR.
+    `  allow_cidrs: [${['"${TESTER_CIDR}"', ...(admin.deployment?.adminApi === true ? ['100.100.0.0/17'] : [])].join(', ')}]`,
+    ...adminApiBlock(admin.deployment?.adminApi === true),
     '',
   ].join('\n');
+}
+
+// ADR-0008: the gateway's own spend-limits admin API (https://code.claude.com/docs/en/claude-apps-gateway-spend-limits),
+// which the admin-ui BFF calls server-to-server with GATEWAY_ADMIN_WRITE_KEY. Retention matches the gateway's own
+// defaults, stated explicitly rather than left implicit. write_keys/read_keys entries are {id, key} objects, not
+// bare strings (confirmed live 2026-10-16 against the gateway's own schema and Anthropic's example config). Shared
+// by both topologies: the admin API is as usable on the test deployment as on the private one.
+function adminApiBlock(enabled) {
+  if (!enabled) return [];
+  return [
+    '',
+    '# The gateway\'s own spend-limits admin API, called by the admin-ui backend (ADR-0008). Not a human sign-in path:',
+    '# GATEWAY_ADMIN_WRITE_KEY is a server-held secret, never a developer credential.',
+    'admin:',
+    '  write_keys:',
+    '    - id: admin-ui',
+    '      key: "${GATEWAY_ADMIN_WRITE_KEY}"',
+    '  spend_retention_months: 13',
+    '  audit_retention_days: 365',
+  ];
 }
 
 // The network-restricted deployment (ADR-0005): X-Forwarded-For trusted only from the environment's infrastructure
@@ -220,6 +312,8 @@ function renderPrivate(admin, adminFile, oidc, upstreamAndModels) {
     '      logs: false',
     '      traces: false',
   ] : [];
+  // ADR-0008: the gateway's own spend-limits admin API; see adminApiBlock's own comment.
+  const adminApi = adminApiBlock(d.adminApi === true);
   return [
     '# Claude apps gateway: network-restricted deployment on Azure Container Apps (ADR-0005).',
     `# Generated from ${adminFile} by the admin script new-gateway-config.mjs --topology private (ADR-0004).`,
@@ -247,9 +341,13 @@ function renderPrivate(admin, adminFile, oidc, upstreamAndModels) {
     '',
     ...upstreamAndModels,
     'access_control:',
-    `  allow_cidrs: [${d.developerCidrs.join(', ')}]`,
+    // 100.100.0.0/17 etc. are the same reserved ranges trusted_proxies already names (U-64): admin-ui's own
+    // server-to-server calls to this gateway, from within the same environment, arrive from them too, live-found
+    // 2026-10-17 (measured 100.100.0.41) - not from inside developerCidrs, the VNet's own range.
+    `  allow_cidrs: [${[...d.developerCidrs, ...(d.adminApi === true ? ['100.100.0.0/17', '100.100.128.0/19', '100.100.160.0/19', '100.100.192.0/19'] : [])].join(', ')}]`,
     ...rateLimits,
     ...telemetry,
+    ...adminApi,
     '',
   ].join('\n');
 }
@@ -272,7 +370,7 @@ function main() {
     throw new Error(`${values.admin} is not readable JSON: ${error.message}`);
   }
   const knownRoles = JSON.parse(fs.readFileSync(values['entra-app'], 'utf8')).appRoles.map((r) => r.value);
-  const errors = adminErrors(admin, knownRoles);
+  const errors = adminErrors(admin, knownRoles, values.topology);
   if (errors.length) throw new Error(`${values.admin} has ${errors.length} problem(s):\n  ${errors.join('\n  ')}`);
   const relative = path.relative(root, path.resolve(values.admin));
   const yaml = renderGatewayConfig(admin, { topology: values.topology,

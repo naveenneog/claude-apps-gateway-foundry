@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { renderGatewayConfig } from '../scripts/admin/new-gateway-config.mjs';
+import { renderGatewayConfig, adminErrors } from '../scripts/admin/new-gateway-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
@@ -70,6 +70,56 @@ test('T-52 values that YAML would read as another type are quoted', () => {
   const yaml = renderGatewayConfig(admin);
   assert.match(yaml, /^ {4}label: "yes"$/m);
   assert.match(yaml, /^ {4}upstream_model: \{ foundry: "2024" \}$/m);
+});
+
+test('T-52 deployment.adminApi renders the same admin: block as the private topology, and is off by default', () => {
+  const admin = twoRoles();
+  const without = renderGatewayConfig(admin);
+  assert.doesNotMatch(without, /\nadmin:\n/, 'no deployment block at all means no admin: block');
+  admin.deployment = { adminApi: true };
+  const withIt = renderGatewayConfig(admin);
+  assert.match(withIt, /\nadmin:\n {2}write_keys:\n {4}- id: admin-ui\n {6}key: "\$\{GATEWAY_ADMIN_WRITE_KEY\}"\n {2}spend_retention_months: 13\n {2}audit_retention_days: 365\n/);
+  admin.deployment = { adminApi: false };
+  assert.doesNotMatch(renderGatewayConfig(admin), /\nadmin:\n/, 'deployment present but adminApi false renders no admin: block');
+});
+
+test('T-52 deployment.adminApi on the test topology also allowlists the environment\'s own reserved routing range', () => {
+  const admin = twoRoles();
+  const without = renderGatewayConfig(admin);
+  assert.match(without, /^ {2}allow_cidrs: \["\$\{TESTER_CIDR\}"\]$/m, 'without adminApi, only the tester CIDR is allowed');
+  admin.deployment = { adminApi: true };
+  const withIt = renderGatewayConfig(admin);
+  // admin-ui calls this gateway from within the same Consumption-topology environment, over the environment's own
+  // internal DNS; that traffic still arrives at the gateway's own access_control check from the environment's
+  // reserved routing range (measured 100.100.0.190, 2026-10-17), which is not the tester's own CIDR.
+  assert.match(withIt, /^ {2}allow_cidrs: \["\$\{TESTER_CIDR\}", 100\.100\.0\.0\/17\]$/m);
+});
+
+test('T-52 a policy\'s own desktop flag works on the test topology too, so one role can get Claude Code/VS Code only and another also gets Desktop', () => {
+  const admin = twoRoles(); // Gateway.Premium and Gateway.Standard, neither opted in by default
+  const base = renderGatewayConfig(admin);
+  assert.doesNotMatch(base, /desktop: \{\}/, 'no policy carries desktop by default, on either topology');
+  admin.policies[0].desktop = true; // Gateway.Premium only
+  const mixed = renderGatewayConfig(admin);
+  const policiesBlock = mixed.slice(mixed.indexOf('\nmanaged:\n'));
+  assert.equal(policiesBlock.match(/^ {6}desktop: \{\}$/gm)?.length, 1, policiesBlock);
+  assert.match(policiesBlock.split('Gateway.Standard')[0], /desktop: \{\}/, 'Premium (listed first in policies) carries it');
+  assert.doesNotMatch(policiesBlock.split('Gateway.Standard')[1], /desktop: \{\}/, 'Standard does not');
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+});
+
+test('T-52 deployment.emailClaim renders oidc.email_claim, for an IdP whose id_token carries no email claim', () => {
+  const admin = twoRoles();
+  const without = renderGatewayConfig(admin);
+  assert.doesNotMatch(without, /email_claim/, 'without deployment.emailClaim, oidc reads the id_token\'s own email claim');
+  admin.deployment = { emailClaim: 'preferred_username' };
+  const withIt = renderGatewayConfig(admin);
+  assert.match(withIt, /^ {2}allowed_email_domains: \["\$\{ALLOWED_EMAIL_DOMAIN\}"\]\n {2}email_claim: preferred_username$/m);
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+  for (const bad of ['', 42, true, null]) {
+    admin.deployment = { emailClaim: bad };
+    assert.ok(adminErrors(admin, admin.roles, 'test').some((e) => e.startsWith('deployment.emailClaim')), `${JSON.stringify(bad)} was accepted`);
+  }
 });
 
 test('T-52 the renderer refuses a $ in any value from the admin file, even one that skipped validation', () => {
@@ -137,3 +187,116 @@ for (const [label, change, message] of [
     assert.equal(fs.existsSync(r.out), false);
   });
 }
+
+test('T-89 a valid budgets array passes validation and renders a byte-identical gateway.yaml to the same file without it', () => {
+  const admin = twoRoles();
+  const withoutBudgets = renderGatewayConfig(admin);
+  admin.budgets = [
+    { scope: { type: 'organization' }, amountUsd: 500, period: 'monthly' },
+    { scope: { type: 'rbac_group', rbac_group_id: 'Gateway.Premium' }, amountUsd: 200, period: 'monthly' },
+    { scope: { type: 'user', user_id: 'a1b2c3' }, amountUsd: null, period: 'daily' },
+  ];
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+  assert.equal(renderGatewayConfig(admin), withoutBudgets, 'budgets are admin-API-only; never rendered into gateway.yaml');
+});
+
+for (const [label, change, message] of [
+  ['not a list', (a) => { a.budgets = { scope: { type: 'organization' }, amountUsd: 1, period: 'monthly' }; }, /budgets: must be a list/],
+  ['an entry that is null', (a) => { a.budgets = [null]; }, /budgets\[0\]: must be an object/],
+  ['an unknown scope.type', (a) => { a.budgets = [{ scope: { type: 'team' }, amountUsd: 1, period: 'monthly' }]; }, /budgets\[0\]\.scope\.type: must be user, rbac_group or organization/],
+  ['an rbac_group scope with no rbac_group_id', (a) => { a.budgets = [{ scope: { type: 'rbac_group' }, amountUsd: 1, period: 'monthly' }]; }, /budgets\[0\]\.scope\.rbac_group_id: required/],
+  ['an rbac_group_id not in roles', (a) => { a.budgets = [{ scope: { type: 'rbac_group', rbac_group_id: 'Gateway.Unknown' }, amountUsd: 1, period: 'monthly' }]; }, /budgets\[0\]\.scope\.rbac_group_id: Gateway\.Unknown is not in roles/],
+  ['a user scope with no user_id', (a) => { a.budgets = [{ scope: { type: 'user' }, amountUsd: 1, period: 'monthly' }]; }, /budgets\[0\]\.scope\.user_id: required/],
+  ['an invalid period', (a) => { a.budgets = [{ scope: { type: 'organization' }, amountUsd: 1, period: 'yearly' }]; }, /budgets\[0\]\.period: must be daily, weekly, monthly/],
+  ['a negative amountUsd', (a) => { a.budgets = [{ scope: { type: 'organization' }, amountUsd: -1, period: 'monthly' }]; }, /budgets\[0\]\.amountUsd: must be null .* or a non-negative number/],
+  ['a non-numeric amountUsd', (a) => { a.budgets = [{ scope: { type: 'organization' }, amountUsd: '500', period: 'monthly' }]; }, /budgets\[0\]\.amountUsd: must be null/],
+  ['two caps for the same scope and period', (a) => { a.budgets = [{ scope: { type: 'organization' }, amountUsd: 1, period: 'monthly' }, { scope: { type: 'organization' }, amountUsd: 2, period: 'monthly' }]; }, /budgets: organization has two monthly caps/],
+]) {
+  test(`T-89 budgets with ${label} is refused by adminErrors before anything is rendered`, () => {
+    const admin = twoRoles();
+    change(admin);
+    const errors = adminErrors(admin, admin.roles, 'test');
+    assert.ok(errors.some((e) => message.test(e)), `expected one of ${JSON.stringify(errors)} to match ${message}`);
+  });
+}
+
+// T-113 (ADR-0012): deployment.database chooses the test topology's store. "sidecar", the default, is today's in-app
+// PostgreSQL on 127.0.0.1; "managed" is a Flexible Server reached over TLS at ${GATEWAY_PG_HOST}.
+const storeBlock = (yaml) => yaml.slice(yaml.indexOf('\nstore:\n') + 1).split('\n\n')[0];
+
+test('T-113 deployment.database absent or "sidecar" renders today\'s store, byte for byte', () => {
+  const admin = twoRoles();
+  const base = renderGatewayConfig(admin);
+  assert.equal(storeBlock(base), 'store:\n  postgres_url: postgres://gateway@127.0.0.1:5432/gateway\n  password: "${GATEWAY_PG_PASSWORD}"\n  connect_timeout_seconds: 10');
+  admin.deployment = { database: 'sidecar' };
+  assert.equal(renderGatewayConfig(admin), base);
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+});
+
+test('T-113 deployment.database "managed" connects to ${GATEWAY_PG_HOST} with sslmode=require and changes nothing else', () => {
+  const admin = twoRoles();
+  const base = renderGatewayConfig(admin);
+  admin.deployment = { database: 'managed' };
+  const managed = renderGatewayConfig(admin);
+  assert.equal(storeBlock(managed), 'store:\n  postgres_url: "postgres://gateway@${GATEWAY_PG_HOST}:5432/gateway?sslmode=require"\n  password: "${GATEWAY_PG_PASSWORD}"\n  connect_timeout_seconds: 10');
+  assert.equal(managed.replace(storeBlock(managed), ''), base.replace(storeBlock(base), ''), 'only the store block differs');
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+});
+
+test('T-113 any other deployment.database value is refused, and the private topology, always managed, refuses "sidecar"', () => {
+  const admin = twoRoles();
+  for (const bad of ['Managed', 'azurefiles', '', 1, true, null]) {
+    admin.deployment = { database: bad };
+    assert.ok(adminErrors(admin, admin.roles, 'test').some((e) => e.startsWith('deployment.database')), `${JSON.stringify(bad)} was accepted`);
+  }
+  admin.deployment = { database: 'sidecar', developerCidrs: ['10.0.0.0/16'] };
+  assert.ok(adminErrors(admin, admin.roles, 'private').some((e) => e.startsWith('deployment.database')), 'the private topology has no sidecar');
+  admin.deployment = { database: 'managed', developerCidrs: ['10.0.0.0/16'] };
+  assert.ok(!adminErrors(admin, admin.roles, 'private').some((e) => e.startsWith('deployment.database')));
+});
+
+// T-118 (P-39): the example a first install copies is valid as shipped, so a reader who only changes the model
+// deployment names gets a working admin file, with the admin API, the managed database and one spend cap.
+test('T-118 config/gateway-admin.example.json passes validation and turns on what a first install needs', () => {
+  const example = JSON.parse(read('config/gateway-admin.example.json'));
+  const roles = JSON.parse(read('infra/azure-test/entra-app.json')).appRoles.map((r) => r.value);
+  assert.deepEqual(adminErrors(example, roles, 'test'), []);
+  assert.equal(example.deployment.adminApi, true, 'the admin console and the budgets stage need the admin API');
+  assert.equal(example.deployment.database, 'managed', 'spend and chargeback survive configuration saves');
+  assert.ok(example.budgets.some((b) => b.scope.type === 'organization'), 'an organization-wide cap from the first day');
+  assert.deepEqual(example.policies.map((p) => p.role).sort(), [...example.roles].sort(), 'every admitted role has a policy');
+  assert.match(renderGatewayConfig(example), /sslmode=require/);
+});
+
+// T-122 (P-40): per-role Claude Desktop settings. Desktop applies the gateway's bootstrap values over local settings
+// and makes them read-only (https://claude.com/docs/third-party/claude-desktop/configuration, bootstrapUrl).
+const desktopAdmin = (desktopSettings, desktop = true) => ({
+  roles: ['Gateway.Standard', 'Gateway.Premium'],
+  models: [{ id: 'claude-sonnet-5', deployment: 'claude-sonnet-5' }],
+  policies: [
+    { role: 'Gateway.Premium', models: ['claude-sonnet-5'], desktop, ...(desktopSettings === undefined ? {} : { desktopSettings }) },
+    { role: 'Gateway.Standard', models: ['claude-sonnet-5'] },
+  ],
+});
+
+test('T-122 desktopSettings renders Chat, Cowork and Code switches into the policy\'s desktop block', () => {
+  const yaml = renderGatewayConfig(desktopAdmin({ chatTabEnabled: true, coworkTabEnabled: false, isClaudeCodeForDesktopEnabled: false }), { topology: 'test' });
+  assert.match(yaml, /      desktop:\n        chatTabEnabled: true\n        coworkTabEnabled: false\n        isClaudeCodeForDesktopEnabled: false\n/);
+  assert.match(renderGatewayConfig(desktopAdmin(undefined), { topology: 'test' }), /      desktop: \{\}\n/, 'no settings: the empty opt-in as before');
+  assert.match(renderGatewayConfig(desktopAdmin({}), { topology: 'test' }), /      desktop: \{\}\n/, 'an empty settings object is the plain opt-in');
+});
+
+test('T-122 desktopSettings is refused unless it holds known switches as true or false, and is not rendered with Desktop off', () => {
+  for (const [settings, desktop, message] of [
+    [{ chatTabEnabled: 'yes' }, true, /desktopSettings\.chatTabEnabled: must be true or false/],
+    [{ bootstrapUrl: 'https://x' }, true, /desktopSettings\.bootstrapUrl: not a supported Claude Desktop setting/],
+    [['chatTabEnabled'], true, /desktopSettings: must be an object/],
+  ]) {
+    assert.match(adminErrors(desktopAdmin(settings, desktop), ['Gateway.Standard', 'Gateway.Premium'], 'test').join('\n'), message);
+  }
+  assert.deepEqual(adminErrors(desktopAdmin({ coworkTabEnabled: false }), ['Gateway.Standard', 'Gateway.Premium'], 'test'), []);
+  // The console's Desktop switch can turn a role off without removing its settings; they stay, unrendered.
+  const off = desktopAdmin({ chatTabEnabled: true }, false);
+  assert.deepEqual(adminErrors(off, ['Gateway.Standard', 'Gateway.Premium'], 'test'), []);
+  assert.doesNotMatch(renderGatewayConfig(off, { topology: 'test' }), /desktop/);
+});
