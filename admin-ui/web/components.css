@@ -601,6 +601,10 @@ details.onboarding .onboarding-body h3 { margin: 4px 0 -8px; font-size: 13px; }
 .search input:not([type="checkbox"]) { width: 240px; height: 32px; padding-left: 32px; font-size: 13px; }
 input.compact:not([type="checkbox"]) { min-width: 120px; height: 30px; padding: 0 8px; font-size: 13px; }
 .tag-edit { display: flex; flex-direction: column; gap: 4px; }
+/* ADR-0015: the Business units table carries five tags; the User column keeps room for its address. */
+.tags-table td:first-child { min-width: 220px; }
+.tags-table input.compact:not([type="checkbox"]) { min-width: 96px; width: 100%; }
+.import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .footnotes { padding: 0 2px; font-size: 12px; line-height: 1.5; color: var(--text-subtle); }
 .footnotes-title { margin: 0 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .footnotes ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding-left: 16px; }
@@ -657,3 +661,6 @@ details.help-topic > summary:focus-visible { outline-offset: -2px; }
 .help-links { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
 .kit-files { display: flex; flex-wrap: wrap; gap: 8px; }
 details.help-topic > .card-body { padding: 14px 16px 16px 34px; }
+
+/* P-43: the soft limit's percent field holds two digits. */
+.num-input { max-width: 8rem; }

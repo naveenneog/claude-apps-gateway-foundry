@@ -57,10 +57,6 @@
     The topology the gateway's configuration was rendered for: private (default) or test. admin-ui renders the
     configuration it saves with the same value (ADR-0010).
 
-.PARAMETER GrantUserWrite
-    Also grants User.ReadWrite.All, so the Chargeback page can set a user's department and cost center. It can change
-    any user's profile in the tenant; without it those attributes are set in Entra ID directly.
-
 .PARAMETER EnableSignIn
     Turns on Container Apps authentication for admin-ui with its own app registration ("<app>-signin", created if
     missing) carrying the AdminUi.Admin app role. Saving the configuration, creating roles and tagging users need it.
@@ -83,7 +79,6 @@ param(
     [string]$ImageTag = (Get-Date -Format 'yyyy-MM-dd'),
     [string]$AllowedCidr = '10.40.0.0/16',
     [ValidateSet('test', 'private')][string]$Topology = 'private',
-    [switch]$GrantUserWrite,
     [switch]$EnableSignIn,
     [string[]]$SignInAdmins = @(),
     [switch]$Plan
@@ -103,7 +98,7 @@ $NEEDED_GRAPH_ROLES = @(
     @{ Value = 'User.Read.All'; Id = 'df021288-bdef-4463-88db-98f22de89214' },
     @{ Value = 'Application.ReadWrite.OwnedBy'; Id = '18a4783c-866b-4cc7-a460-3d5e5662c884' }
 )
-if ($GrantUserWrite) { $NEEDED_GRAPH_ROLES += @{ Value = 'User.ReadWrite.All'; Id = '741f803b-c850-494e-b5df-cde7c675a1ca' } }
+# ADR-0015: business-unit tags live in the gateway database, so admin-ui never needs User.ReadWrite.All.
 
 function Step([string]$Name, [scriptblock]$Body) {
     Write-Host "== $Name =="
@@ -236,7 +231,7 @@ Step 'Deploy Bicep' {
 }
 
 Step 'Grant Microsoft Graph application permissions (needs Global Administrator or Privileged Role Administrator)' {
-    $assignments = (az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$identityPrincipalId/appRoleAssignments" --query 'value[].{appRoleId:appRoleId,resourceId:resourceId}' -o json | ConvertFrom-Json)
+    $assignments = (az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$identityPrincipalId/appRoleAssignments" --query 'value[].{id:id,appRoleId:appRoleId,resourceId:resourceId}' -o json | ConvertFrom-Json)
     $existing = @($assignments | Where-Object { $_.resourceId -eq $graphSpId } | ForEach-Object appRoleId)
     # A body passed inline (--body $json) goes through az.cmd's cmd.exe re-parse on Windows, which mangles the
     # embedded quotes; @file (az rest's own documented form for this) sidesteps that entirely.
@@ -251,6 +246,12 @@ Step 'Grant Microsoft Graph application permissions (needs Global Administrator 
         }
     } finally {
         Remove-Item $bodyFile -Force -ErrorAction SilentlyContinue
+    }
+    # An install before ADR-0015 could grant User.ReadWrite.All on request. It is no longer used; removing an
+    # app role assignment needs the same administrator as granting one, so the command is printed, not run.
+    $LEGACY_USER_WRITE = '741f803b-c850-494e-b5df-cde7c675a1ca'
+    foreach ($legacy in @($assignments | Where-Object { $_.resourceId -eq $graphSpId -and $_.appRoleId -eq $LEGACY_USER_WRITE })) {
+        Write-Warning "admin-ui still holds User.ReadWrite.All from an earlier install; it is not used (ADR-0015). A Privileged Role Administrator removes it with: az rest --method delete --url `"https://graph.microsoft.com/v1.0/servicePrincipals/$identityPrincipalId/appRoleAssignments/$($legacy.id)`""
     }
 }
 

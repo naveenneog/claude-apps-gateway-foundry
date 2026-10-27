@@ -82,6 +82,9 @@ Option 2, with these rules:
 - **Business-unit tagging** writes `department` or `employeeOrgData.costCenter` on the Entra user. It needs
   `User.ReadWrite.All`, which can change any user's profile, so `Deploy-AdminUi.ps1` grants it only with
   `-GrantUserWrite`; without it the page shows the attribute read-only.
+  **Amended by ADR-0015 (2026-10-27):** department, company, office, cost center and division are tags in the gateway's
+  managed PostgreSQL, set in the console; admin-ui no longer reads them from Entra or writes Entra, and
+  `User.ReadWrite.All` and `-GrantUserWrite` are removed. Gateway role grouping is unchanged.
 - **Permissions view:** admin-ui reports what it can do from its own tokens: the Graph token's `roles` claim and the
   ARM permissions API on the gateway app (U-88).
 

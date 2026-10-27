@@ -45,13 +45,13 @@ Each description is the page's own header text.
 |---|---|---|
 | Dashboard | Spend the gateway has recorded this month, and the latest changes to spend caps. The spend is the gateway's list-price estimate, not the Foundry invoice. | admin-ui/web/app.js:23 |
 | Budgets | Spend caps the gateway enforces for a user, a role or the whole organization. A change applies immediately. A user cap accepts an e-mail address or an OIDC subject; an e-mail address takes effect after that developer's first request. | admin-ui/web/app.js:120 |
-| Chargeback | Spend per business unit, from the gateway's per-user totals and the users' Entra ID department and cost center. The Business units card sets a user's department and cost center; the report downloads as CSV. | admin-ui/web/chargeback-page.js:220 |
+| Chargeback | Spend per business unit, from the gateway's per-user totals and each user's business-unit tags (department, cost center, company, office, division) kept in the gateway database. The Business units card sets the tags; the report downloads as CSV. | admin-ui/web/chargeback-page.js:249 |
 | Developers | People who hold a gateway app role in Entra ID. The role decides which models and apps they can use. | admin-ui/web/developers-page.js:12 |
 | Roles | App roles on the gateway's Entra app registration. A developer needs an admitted role to use the gateway. A new role is not admitted until Access & models admits it. | admin-ui/web/roles-page.js:5 |
 | Access & models | Which models each admitted role can use, and whether it can use Claude Desktop. A change is applied as a new gateway revision. | admin-ui/web/access-page.js:49 |
 | Audit | Changes to spend caps, as the gateway records them. The latest 50 are shown. | admin-ui/web/audit-page.js:6 |
 | Settings | What the console is allowed to do, and how to grant what is missing. The **Client onboarding** section downloads the client kit for a chosen model: the zip that `new-client-policy.mjs` writes for this gateway, or one of its files, such as `ClaudeDesktop-HKLM.reg` and the Intune platform script `Set-ClaudeDesktopPolicy.ps1`. It also gives the gateway profile command on a gateway with a public address, or `managed-settings.json` on the network-restricted gateway. | admin-ui/web/settings-page.js:4 |
-| Help | How to do each administrator task in this console, and where the full guide is: departments, groups, console access, one machine, Intune, Claude Desktop, models, caps and chargeback. | admin-ui/web/help-page.js:5 |
+| Help | How to do each administrator task in this console, and where the full guide is: departments, groups, console access, one machine, Intune, Claude Desktop, models, caps, the soft limit and chargeback. | admin-ui/web/help-page.js:5 |
 
 ## Common tasks
 
@@ -60,12 +60,13 @@ Each description is the page's own header text.
 | Give a developer access | **Developers** > user principal name and role (`Gateway.Standard` or `Gateway.Premium`) > **Grant role** | The developer signs in from Claude Code; the role decides the models ([manage users](how-to-manage-users-and-groups.md)) |
 | Add a new model to a role | **Access & models** > **Add model**, with its Foundry deployment name > tick it for the role > **Review changes** > **Apply and roll out** | A new gateway revision serves it ([configure models](how-to-admin-configure.md)) |
 | Raise a user's or a role's budget | **Budgets** > **Set cap** with the same scope, period and the new amount | Replaces the cap and applies on the next request; no revision ([spend limits](https://code.claude.com/docs/en/claude-apps-gateway-spend-limits)) |
-| Group spend by team | **Chargeback** > **Business units** > **Edit** a user's department and cost center > **Export CSV** | Spend per business unit, from Entra user attributes. **Edit** needs the console's `User.ReadWrite.All`; without it the attributes are set in Entra ID, one by one or from a CSV file ([group developers into departments](how-to-organize-departments.md)) |
+| Pace the last part of a monthly cap | **Access & models** > **Soft limit** > switch on, set the share > **Review changes** > **Apply and roll out** | Past that share of a person's monthly cap, the spend pacer gives them a daily cap of the rest over the days left ([soft limit](how-to-admin-configure.md#pace-the-last-part-of-a-monthly-cap-with-a-soft-limit)) |
+| Group spend by team | **Chargeback** > **Business units** > **Edit** a user's tags, or **Import CSV** > **Export CSV** | Spend per business unit, from the tags the console keeps in the gateway database; Entra ID is not changed. Tags need the managed database option ([group developers into departments](how-to-organize-departments.md)) |
 | Onboard client machines | **Settings** > **Client onboarding** > a model > **Download client kit (.zip)** | The `developer`, `intune`, `desktop` and `login` folders for this gateway, with `New-IntunePackage.ps1` at the top; no separate `onboarding.json` (admin-ui/web/settings-page.js:57) |
 
 Applying a change on **Access & models** starts a new gateway revision. With the in-app PostgreSQL sidecar, the test
 topology's default, its database starts empty, so spend totals, caps and the audit trail reset, and the page asks for
-confirmation first (admin-ui/server/gateway-config.mjs:170). With the managed database they are kept and the page
+confirmation first (admin-ui/server/gateway-config.mjs:187). With the managed database they are kept and the page
 does not ask ([choose the database](how-to-install-stage-by-stage.md#choose-the-database)).
 
 ## Messages

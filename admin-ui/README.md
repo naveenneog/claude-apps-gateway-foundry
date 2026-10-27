@@ -32,14 +32,16 @@ accounts and do not apply to a self-hosted gateway whose developers sign in by E
   (Container Apps returns no ETag, so admin-ui compares `lastModifiedAt` and the latest revision; ADR-0010 amendment).
 - **Roles** (ADR-0010) — lists the gateway registration's app roles and creates new ones (`PATCH` of the full
   `appRoles` list, [Graph update application](https://learn.microsoft.com/en-us/graph/api/application-update)).
-- **Chargeback** (ADR-0010) — this period's spend from `/effective` per developer, joined to Entra users by e-mail and
-  grouped by `department`, `companyName`, `officeLocation`, `costCenter`, `division` (the last two from
-  `employeeOrgData`) or gateway role; downloadable as CSV with spreadsheet-formula cells neutralised
-  ([OWASP CSV injection](https://owasp.org/www-community/attacks/CSV_Injection)). Tagging a user sets `department`
-  and `employeeOrgData.costCenter` ([Graph user resource](https://learn.microsoft.com/en-us/graph/api/resources/user)).
-  The **Business units** card lists every holder of a gateway app role, with or without spend, and their department
-  (the business unit) and cost center. Editing a user's department to a new name creates that unit; the field offers
-  the existing names. Groups that hold a role are listed by name only, because their members are not expanded.
+- **Chargeback** (ADR-0010, ADR-0015) — this period's spend from `/effective` per developer, joined to Entra users by
+  e-mail and grouped by a business-unit tag (`department`, `costCenter`, `companyName`, `officeLocation`,
+  `division`) or by gateway role; downloadable as CSV with spreadsheet-formula cells neutralised
+  ([OWASP CSV injection](https://owasp.org/www-community/attacks/CSV_Injection)). Tags are kept in the gateway's
+  managed PostgreSQL, table `admin_console.user_tags`, by Entra object ID (`server/user-tags.mjs`); admin-ui reaches
+  it with the gateway app's `GATEWAY_PG_HOST`, `GATEWAY_PG_USER` and `pg-password`, over TLS with SCRAM-SHA-256
+  (`server/pg-wire.mjs`). Entra users are only read. The **Business units** card lists every holder of a gateway app
+  role, with or without spend, and their five tags; **Edit** sets them and **Import CSV** sets many at once. A new
+  department name creates that unit. Groups that hold a role are listed by name only, because their members are not
+  expanded. On the in-app sidecar database the card explains that tags need the managed database.
 - **Settings** — what the deployed identity can do (`/api/capabilities`), who is signed in (`/api/me`), and the client kit
   (`/api/client-kit`, P-41).
 - **Help** — each administrator task with its steps in the console's labels and a link to its article
@@ -81,7 +83,7 @@ With sign-in on, every route below also needs `AdminUi.Admin`.
 | `GET /api/roles` / `POST /api/roles` | `Application.Read.All` / `AdminUi.Admin` and `Application.ReadWrite.OwnedBy` |
 | `GET /api/chargeback?period=&groupBy=&format=csv` | `User.Read.All` |
 | `GET /api/business-units` | `User.Read.All`, `Application.Read.All` |
-| `PATCH /api/users/{email}` | `AdminUi.Admin` and `User.ReadWrite.All` |
+| `PUT /api/user-tags/{objectId}`, `POST /api/user-tags/import` | `AdminUi.Admin` and the managed database (ADR-0015) |
 | `GET`/`POST`/`DELETE /api/developers`, `/api/spend-limits…` | — beyond the sign-in rule above |
 
 `AdminUi.Admin` is read from the `X-MS-CLIENT-PRINCIPAL` header Container Apps authentication adds
@@ -102,7 +104,7 @@ gateway's own identity.
 
 ## Permissions this needs, and why
 
-The admin-ui identity holds four Microsoft Graph application permissions, five with `-GrantUserWrite`, granted by `Deploy-AdminUi.ps1` after the
+The admin-ui identity holds four Microsoft Graph application permissions, granted by `Deploy-AdminUi.ps1` after the
 Bicep deployment (ARM has no resource type for a Graph permission grant on a service principal):
 
 | Permission | Why |
@@ -111,7 +113,10 @@ Bicep deployment (ARM has no resource type for a Graph permission grant on a ser
 | `Application.Read.All` | To read the gateway's app registration's own `appRoles` (their ids and display values), so the Developers page shows role names, not raw GUIDs |
 | `User.Read.All` | To resolve a developer's email to their object id before granting a role |
 | `Application.ReadWrite.OwnedBy` | To create app roles on the gateway's registration. It reaches only applications the identity owns; `Deploy-AdminUi.ps1` adds the identity as an owner of the gateway's registration ([permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference#applicationreadwriteownedby)) |
-| `User.ReadWrite.All` (only with `-GrantUserWrite`) | To set a user's department and cost center from the Chargeback page. It can change any user's profile; without it these attributes are set in Entra ID directly |
+
+`User.ReadWrite.All` is not used: business-unit tags are kept in the gateway database instead of Entra ID (ADR-0015).
+When an earlier install left it on the identity, `Deploy-AdminUi.ps1` prints the command that removes it
+(`infra/Deploy-AdminUi.ps1`, the Microsoft Graph step).
 
 The Bicep template also gives the identity **Container Apps Contributor** (`358470bc-b998-42bd-ab17-a7e34c199c0f`)
 on the gateway's container app only, so it can write the `gateway-config` secret
@@ -179,7 +184,6 @@ unchanged tag does not make Container Apps re-pull it) and skips a Graph permiss
 | `-Topology test` | The gateway configuration was rendered for the test topology (default `private`). |
 | `-EnableSignIn` | Creates the `<app-registration>-admin-ui-signin` registration (ID tokens, no client secret, assignment required, app role `AdminUi.Admin`) and turns on Container Apps authentication for admin-ui. `/api/health` stays anonymous. |
 | `-SignInAdmins a@contoso.com,...` | Assigns `AdminUi.Admin` to those users. A user who already holds a different role on the app still gets `AdminUi.Admin`. |
-| `-GrantUserWrite` | Also grants `User.ReadWrite.All`. |
 
 ## Reachability
 

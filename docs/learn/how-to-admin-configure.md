@@ -19,7 +19,7 @@ writes nothing when a check fails (docs/adr/0004-operator-and-developer-tooling.
 | Every task | Node.js 22 or later, and this repository |
 | Deploy a configuration change | The state file `infra/azure-test/.state/<resource group>.json` that `infra/azure-test/deploy.mjs` wrote; the Azure CLI signed in with `az login`, `az account set --subscription <subscription>` for the deployment's subscription, and Owner on it, as for the deployment itself ([install prerequisites](how-to-install-stage-by-stage.md#prerequisites)) |
 | Grant or remove a role | The state file, from which `set-developer.mjs` reads the gateway's service principal (scripts/admin/set-developer.mjs:107); the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) signed in to the deployment's tenant with `az login --tenant <tenantId>` (the `tenantId` in the state file), because `set-developer.mjs` calls Microsoft Graph with that sign-in (infra/azure-test/lib/azure-rest.mjs:17); and an account that can assign users to the gateway's enterprise application: Cloud Application Administrator, Application Administrator, User Administrator, or an owner of its service principal ([assign users and groups](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal)). The account that ran `deploy.mjs` is an owner |
-| Change models and per-role model access, or generate client payloads | Nothing more: `new-gateway-config.mjs` reads the admin file and the Entra application manifest in the repository, `infra/azure-test/entra-app.json` (scripts/admin/new-gateway-config.mjs:317-323), and `new-client-policy.mjs` reads only its options |
+| Change models and per-role model access, or generate client payloads | Nothing more: `new-gateway-config.mjs` reads the admin file and the Entra application manifest in the repository, `infra/azure-test/entra-app.json` (scripts/admin/new-gateway-config.mjs:342-354), and `new-client-policy.mjs` reads only its options |
 
 The commands use the file names and resource group of [the first-install tutorial](tutorial-first-install.md). After the
 admin console has saved the configuration, the `app` stage deploys the console's configuration, not the file, so models
@@ -44,7 +44,7 @@ rendering of the fixed sections, the ADR-0003 topology, is part of the script.
 | `roles` | The app roles the gateway admits, from `infra/azure-test/entra-app.json`; they become `oidc.allowed_groups` |
 | `models` | Each model's `id` for clients, optional `label`, and the Foundry `deployment` that serves it |
 | `policies` | Optional: one entry per admitted role, `{ "role": ..., "models": [...] }`, in the order the gateway checks them |
-| `policies[].desktop` | Optional boolean. Claude Desktop's own sign-in endpoint, `/user/bootstrap`, answers 404 unless the matching policy carries a `desktop` key ([Claude Desktop overlay](https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay)); a role without `desktop: true` gets the terminal and VS Code/JetBrains extensions (the `cli` key covers all three) but not Desktop. Absent, a policy falls back to `deployment.desktop`'s own default (scripts/admin/new-gateway-config.mjs:134-135) |
+| `policies[].desktop` | Optional boolean. Claude Desktop's own sign-in endpoint, `/user/bootstrap`, answers 404 unless the matching policy carries a `desktop` key ([Claude Desktop overlay](https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay)); a role without `desktop: true` gets the terminal and VS Code/JetBrains extensions (the `cli` key covers all three) but not Desktop. Absent, a policy falls back to `deployment.desktop`'s own default (scripts/admin/desktop-settings.mjs:26) |
 
 1. Edit the admin file. This example gives `Gateway.Premium` both models and `Gateway.Standard` one:
 
@@ -97,7 +97,7 @@ is not an object, or a label with a line break or a `$`. The gateway replaces `$
 environment variable, also inside a longer string, and a whole `${file:/path}` value with the file's content
 ([secret expansion](https://code.claude.com/docs/en/claude-apps-gateway-config#secret-expansion)), and it serves each
 label to every signed-in user. A `$` in a label could therefore publish a gateway secret, so the renderer also refuses
-a `$` in every value it takes from the admin file (scripts/admin/new-gateway-config.mjs:17-21). `--check` reports a
+a `$` in every value it takes from the admin file (scripts/admin/new-gateway-config.mjs:18-22). `--check` reports a
 configuration that differs from the admin file, or an admin file with a problem, without writing.
 
 ## Claude Desktop: Chat, Cowork and Code
@@ -117,6 +117,85 @@ left out keeps Desktop's default; the settings are kept but not served while the
 Desktop reads the gateway's values when it starts, so a change reaches a developer after Desktop restarts. On
 2026-10-26, with Claude Desktop 2.42304.2.0 against the public Contoso gateway, Chat on with Cowork off showed Home and
 Code with a Chats list, and Cowork on with Chat and Code off showed only a Tasks list (docs/TEST-PLAN.md, T-123).
+
+## Pace the last part of a monthly cap with a soft limit
+
+A soft limit spreads the last part of a person's monthly spend cap over the rest of the month. Once a person's spend
+passes the set share of their monthly cap, for example 80%, the gateway gives them a daily cap of the remaining budget
+divided by the days left in the month, today included, in whole cents
+(scripts/admin/spend-pacing.mjs:110-114). For a $100 monthly cap, with $85 spent of which $3 today, on 27 October
+(five days left): (100 − 82) ÷ 5 = $3.60 a day. The amount stays the same all day and is worked out again each day.
+
+The gateway still enforces every cap on each request, as before. The soft limit changes how fast the end of a budget
+can be spent; it does not make the spend count more exact, which the gateway already checks before every request
+([how enforcement works](https://code.claude.com/docs/en/claude-apps-gateway-spend-limits#how-enforcement-works);
+docs/adr/0014-soft-limit-and-daily-spend-pacing.md:24-27).
+
+| Part | What it does | Source |
+|---|---|---|
+| `job-spend-pacer` | A Container Apps job that runs every five minutes, from the admin console's image and identity. It reads each person's spend and caps from the gateway's admin API and sets, changes or deletes their daily cap. | admin-ui/infra/main.bicep:179-192 |
+| `spend-pacer` key | The job writes with its own key, so the console's **Audit** page lists its changes as `spend-pacer (admin key)`. It deletes only the daily caps it set. | admin-ui/server/pacer-job.mjs:45 |
+| `admin-pacer-key` | The secret that holds the job's key on the gateway app, as `GATEWAY_ADMIN_PACER_KEY`. The installer's `app` stage creates it and keeps its value on later runs. | infra/azure-test/gateway-test.json:239, infra/azure-test/deploy.mjs:266 |
+
+Rules:
+
+- A role or organization daily cap that is lower than the pace applies instead, and no daily cap is set for the person
+  (scripts/admin/spend-pacing.mjs:116).
+- A per-user daily cap that an administrator set on **Budgets** is never changed or deleted; that person is not paced.
+- Below the soft limit, for example in a new month, or with the soft limit off, the job deletes the daily caps it set.
+
+### Turn the soft limit on
+
+Prerequisites: the admin file has `"deployment": { "adminApi": true }`; the gateway has `GATEWAY_ADMIN_PACER_KEY`,
+which the installer's `app` stage adds; and `job-spend-pacer` exists, which `Deploy-AdminUi.ps1` deploys with the
+console. On a gateway without the variable, the console refuses the change and says to run the `app` stage
+(admin-ui/server/gateway-config.mjs:178).
+
+1. In the admin console, open **Access & models**.
+1. In the **Soft limit** card, turn the switch on. The share starts at 80%; type another whole number from 1 to 99 to
+   change it.
+
+   ![The Soft limit card on the Access & models page, switched on at 80% of the monthly cap.](media/admin-console-soft-limit.png)
+
+1. Select **Review changes**. The list shows `Soft limit: off → 80% of the monthly cap`.
+1. Select **Apply and roll out**, and wait until the new revision is running and healthy.
+
+Before the console's first save, the same setting is the admin file key `"spendPacing": { "softLimitPercent": 80 }`,
+deployed with the `app` stage. Turning the switch off removes the key, and the job's next run deletes its daily caps.
+
+### What a developer sees
+
+Claude Code warns a developer at 75% and again at 95% of their most-consumed cap, which is now the daily cap, and shows
+it in `/usage` ([usage warnings](https://code.claude.com/docs/en/claude-apps-gateway-spend-limits#usage-warnings-in-claude-code)).
+Over the daily cap, the gateway answers `429` until 00:00 UTC, and Claude Code shows the message as it is. On the
+Contoso test gateway on 2026-10-27, with a 50% soft limit:
+
+```output
+API Error: Request rejected (429) · spend limit reached (daily; resets 2026-10-28 00:00 UTC) — If this is a daily limit: you have passed 50% of your monthly budget, so the rest is spread over the days left in the month, and the daily limit resets at 00:00 UTC. To raise the monthly budget, ask your gateway administrator.
+```
+
+### Limits
+
+- A person can pass the soft limit and keep spending for up to five minutes before the job sets their daily cap.
+- Requests that are already running when a cap is reached still finish and are counted, so spend can pass a cap by
+  their cost. In the Contoso test, four parallel requests admitted at 6.5 cents ended at 8.1 cents against an 8-cent
+  daily cap (docs/TEST-PLAN.md, T-139).
+- The job runs whether or not the soft limit is on, at 0.25 vCPU and 0.5 GiB for a few seconds every five minutes:
+  about 16,000 vCPU-seconds a month, about $0.50 at list price or nothing within the Container Apps monthly free grant
+  ([Container Apps pricing](https://azure.microsoft.com/pricing/details/container-apps/)).
+
+### Check that it works
+
+- **Audit** lists each daily cap the job sets or changes, with the actor `spend-pacer (admin key)`.
+- The job's runs and their result:
+
+  ```powershell
+  az containerapp job execution list -g $rg -n job-spend-pacer --query "[0:5].{name:name,status:properties.status,start:properties.startTime}" -o table
+  ```
+
+- Each run writes one line to the log, with counts and no names or addresses, for example
+  `{"evt":"spend_pacer.run","percent":80,"paced":1,"set":1,"removed":0,"notPaced":0,"errors":0}`
+  (admin-ui/server/pacer-job.mjs:85).
 
 ## Grant developer access
 

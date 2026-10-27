@@ -342,7 +342,7 @@ const chargeback = {
   ],
   rows: [
     { userId: 'sub-3', name: null, email: null, groupKey: '(unresolved)', roles: ['Gateway.Standard'], spendCents: 600, capCents: null, department: null, costCenter: null, resolved: false },
-    { userId: 'sub-1', name: 'Dev One', email: 'dev.one@contoso.example', groupKey: 'Engineering', roles: ['Gateway.Premium'], spendCents: 3000, capCents: 3000, department: 'Engineering', costCenter: 'CC-100', resolved: true },
+    { userId: 'sub-1', objectId: 'u1', name: 'Dev One', email: 'dev.one@contoso.example', groupKey: 'Engineering', roles: ['Gateway.Premium'], spendCents: 3000, capCents: 3000, department: 'Engineering', costCenter: 'CC-100', companyName: 'Contoso', officeLocation: null, division: null, resolved: true },
     { userId: 'sub-2', name: 'Dev Two', email: 'dev.two@contoso.example', groupKey: 'Engineering', roles: ['Gateway.Standard'], spendCents: 26.43, capCents: 50000, department: 'Engineering', costCenter: null, resolved: true },
     { userId: 'sub-4', name: 'Fin One', email: 'fin.one@contoso.example', groupKey: 'Finance', roles: ['Gateway.Standard'], spendCents: 400, capCents: null, department: 'Finance', costCenter: 'CC-200', resolved: true },
   ],
@@ -373,32 +373,34 @@ test('T-105 chargeback rows: highest spend first, fractional cents to four place
   assert.deepEqual([rows[0].spend, rows[0].cap, rows[0].capPct], ['$30.0000', '$30.00', 100]);
   assert.deepEqual([rows[3].spend, rows[3].cap], ['$0.2643', '$500.00']);
   assert.deepEqual([rows[2].cap, rows[2].capPct], ['Unlimited', null]);
-  assert.deepEqual([rows[1].unresolved, rows[1].editable, rows[1].email], [true, false, '—']);
-  assert.equal(rows[0].editable, true);
-  assert.equal(plain(cb.rowsForDisplay({ ...chargeback, canTag: false })).some((r) => r.editable), false);
+  assert.deepEqual([rows[1].unresolved, rows[1].email], [true, '—']);
+  assert.ok(rows.every((r) => !('editable' in r)), 'the Users card is read-only; tags are edited under Business units (ADR-0015)');
+  assert.deepEqual([rows[0].department, rows[0].costCenter, rows[0].companyName], ['Engineering', 'CC-100', 'Contoso']);
   assert.deepEqual(plain(cb.rowsForDisplay(chargeback, 'Finance')).map((r) => r.name), ['Fin One']);
 });
 
-test('T-105 a chargeback row shows each address once, and tags the user by UPN when the report has one', () => {
+test('T-105 a chargeback row shows each address once', () => {
   const cb = load('chargeback-view.js', 'chargebackView');
   const rows = plain(cb.rowsForDisplay(chargeback));
   assert.deepEqual(rows.map((r) => r.detail), ['dev.one@contoso.example', 'No e-mail recorded', 'fin.one@contoso.example', 'dev.two@contoso.example']);
   const nameless = plain(cb.rowsForDisplay({ ...chargeback, rows: [{ ...chargeback.rows[1], name: null }] }))[0];
   assert.deepEqual([nameless.name, nameless.detail], ['dev.one@contoso.example', null]);
-  assert.equal(rows[0].upn, 'dev.one@contoso.example');
-  const withUpn = plain(cb.rowsForDisplay({ ...chargeback, rows: [{ ...chargeback.rows[1], upn: 'd1@example.com' }] }))[0];
-  assert.equal(withUpn.upn, 'd1@example.com');
 });
 
-test('T-105 tagging sends only the changed attributes, an emptied one as null; without the grant the hint says where to set them', () => {
+test('T-105 T-145 tagging sends only the changed tags, an emptied one as null; without the tag store the hint gives its reason', () => {
   const cb = load('chargeback-view.js', 'chargebackView');
   const devOne = chargeback.rows[1];
   assert.deepEqual(plain(cb.tagPatch(devOne, { department: 'Engineering', costCenter: ' CC-101 ' })), { costCenter: 'CC-101' });
   assert.deepEqual(plain(cb.tagPatch(devOne, { department: '', costCenter: 'CC-100' })), { department: null });
   assert.equal(cb.tagPatch(devOne, { department: 'Engineering', costCenter: 'CC-100' }), null);
+  assert.deepEqual(plain(cb.tagPatch(devOne, { companyName: 'Contoso', officeLocation: 'Pune', division: ' ' })), { officeLocation: 'Pune' });
   assert.match(cb.tagErrors({ department: 'x'.repeat(65), costCenter: '' }).department, /64/);
+  assert.match(cb.tagErrors({ division: 'a\u0007b' }).division, /control/);
   assert.equal(cb.tagHint({ canTag: true }), null);
-  assert.match(cb.tagHint({ canTag: false }), /Entra.*User\.ReadWrite\.All|User\.ReadWrite\.All.*Entra/);
+  assert.equal(cb.tagHint({ canTag: false, tagsReason: 'Business-unit tags are kept in the gateway\'s managed PostgreSQL.' }), 'Business-unit tags are kept in the gateway\'s managed PostgreSQL.');
+  assert.match(cb.tagHint({ canTag: false }), /administrator/);
+  for (const hint of [cb.tagHint({ canTag: false }), cb.tagHint({ canTag: false, tagsReason: 'x' })]) assert.doesNotMatch(hint, /User\.ReadWrite\.All|Entra/);
+  assert.deepEqual(plain(cb.TAGS.map((t) => t.key)), ['department', 'costCenter', 'companyName', 'officeLocation', 'division']);
   assert.equal(cb.csvHref('monthly', 'costCenter'), '/api/chargeback?format=csv&period=monthly&groupBy=costCenter');
 });
 
@@ -410,7 +412,7 @@ test('T-107 business units: named units by name, unassigned users counted, rows 
     users: [
       { id: 'u3', upn: 'cy@contoso.example', name: 'Cy', roles: ['Gateway.Standard'], department: null, costCenter: null },
       { id: 'u2', upn: 'bo@contoso.example', name: 'Bo', roles: ['Gateway.Standard'], department: 'Finance', costCenter: null },
-      { id: 'u4', upn: 'dee@contoso.example', name: 'Dee', roles: ['Gateway.Standard'], department: 'Engineering', costCenter: 'CC-1' },
+      { id: 'u4', upn: 'dee@contoso.example', name: 'Dee', roles: ['Gateway.Standard'], department: 'Engineering', costCenter: 'CC-1', companyName: 'Contoso', officeLocation: 'Pune', division: 'R&D' },
       { id: 'u1', upn: 'ana@contoso.example', name: 'Ana', roles: ['Gateway.Premium', 'Gateway.Standard'], department: 'Engineering', costCenter: 'CC-100' },
     ],
   };
@@ -426,9 +428,11 @@ test('T-107 business units: named units by name, unassigned users counted, rows 
     ['Cy', '', 'Gateway.Standard', true],
   ]);
   assert.equal(view.rows[0].userId, 'u1');
-  assert.equal(view.rows[0].upn, 'ana@contoso.example');
+  assert.deepEqual([view.rows[1].companyName, view.rows[1].officeLocation, view.rows[1].division], ['Contoso', 'Pune', 'R&D']);
+  assert.deepEqual([view.rows[0].companyName, view.rows[0].division], ['', '']);
   assert.equal(plain(cb.businessUnits({ ...data, canTag: false })).rows.some((r) => r.editable), false);
   assert.deepEqual(plain(cb.businessUnits({})), { units: [], options: [], unassignedText: null, skippedText: null, rows: [] });
+  assert.doesNotMatch(plain(cb.businessUnits(data)).skippedText, /Entra/, 'a group is pointed at roles, not at Entra attributes');
 });
 
 const rolesResponse = {
@@ -491,12 +495,12 @@ test('T-105 the permissions checklist counts what is granted and keeps what each
   const sv = load('settings-view.js', 'settingsView');
   const items = [
     { key: 'signIn', label: 'Admin sign-in', granted: true, unlocks: 'Writes.', howToGrant: 'Assign AdminUi.Admin.' },
-    { key: 'graph.writeUsers', label: 'User.ReadWrite.All', granted: false, unlocks: 'Tagging.', howToGrant: 'Run Deploy-AdminUi.ps1 -GrantUserWrite.' },
+    { key: 'database.tags', label: 'Business-unit tags', granted: false, unlocks: 'Tagging.', howToGrant: 'Use the managed database.' },
     { key: 'arm.writeGateway', label: 'Container Apps Contributor', granted: true, unlocks: 'Saving.', howToGrant: 'Deploy main.bicep.' },
   ];
   const list = plain(sv.checklist({ items, problems: ['Microsoft Graph token: timeout'] }));
   assert.deepEqual([list.granted, list.total], [2, 3]);
-  assert.deepEqual([list.items[1].status, list.items[1].howToGrant], ['Missing', 'Run Deploy-AdminUi.ps1 -GrantUserWrite.']);
+  assert.deepEqual([list.items[1].status, list.items[1].howToGrant], ['Missing', 'Use the managed database.']);
   assert.deepEqual(list.problems, ['Microsoft Graph token: timeout']);
 });
 
@@ -594,4 +598,30 @@ test('T-108 the access-denied screen appears only for a signed-in non-admin, and
 test('T-108 app.js checks access before routing, so a non-admin never loads a page', () => {
   const app = fs.readFileSync(path.join(web, 'app.js'), 'utf8');
   assert.match(app, /settingsView\.accessDenied\(/);
+});
+
+// T-140 (ADR-0014): the soft limit is set on the Access & models page, through the same reviewed save as every other
+// edit, so a gateway whose console has saved its configuration can still turn it on.
+test('T-140 the soft limit reads and writes spendPacing, keeps every other key, and is refused without the admin API', () => {
+  const cv = load('config-view.js', 'configView');
+  assert.equal(cv.softLimitOf(contoso), null);
+  const on = cv.setSoftLimit(contoso, 80);
+  assert.equal(JSON.stringify(contoso), frozen, 'the original is not mutated');
+  assert.deepEqual(plain(on.spendPacing), { softLimitPercent: 80 });
+  assert.equal(cv.softLimitOf(on), 80);
+  for (const key of ['$comment', 'roles', 'models', 'policies', 'deployment', 'budgets']) assert.deepEqual(plain(on[key]), contoso[key], key);
+  const off = cv.setSoftLimit(on, null);
+  assert.equal('spendPacing' in off, false);
+  assert.equal(cv.isDirty(contoso, off), false, 'turning it off again is no change at all');
+  assert.equal(cv.softLimitError(contoso, 80), null);
+  for (const bad of [0, 100, 80.5, Number.NaN]) assert.match(cv.softLimitError(contoso, bad), /whole number from 1 to 99/, String(bad));
+  assert.match(cv.softLimitError({ ...contoso, deployment: { adminApi: false } }, 80), /admin API/);
+  const page = fs.readFileSync(path.join(web, 'access-page.js'), 'utf8');
+  assert.match(page, /accessEditor\.softLimit\(s, act\)/, 'the page draws the soft limit card');
+  assert.match(page, /setSoftLimit: \(percent\) => change\(cv\.setSoftLimit\(s\.draft, percent\)/);
+  const editor = fs.readFileSync(path.join(web, 'access-editor.js'), 'utf8');
+  assert.match(editor, /'data-key': 'soft-limit'/);
+  assert.match(editor, /'data-key': 'soft-limit-percent'/);
+  const topics = load('help-topics.js', 'helpTopics');
+  assert.ok(topics.some((topic) => topic.id === 'soft-limit' && topic.labels.includes('Soft limit')), 'Help explains the soft limit');
 });

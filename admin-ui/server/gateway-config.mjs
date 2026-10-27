@@ -8,6 +8,7 @@
 // at startup, so the same PUT changes CONFIG_UPDATED_AT on the container that mounts the config, which starts one.
 import crypto from 'node:crypto';
 import { adminErrors, renderGatewayConfig } from '../../scripts/admin/new-gateway-config.mjs';
+import { PACER_ENV } from '../../scripts/admin/spend-pacing.mjs';
 
 export const ARM_API_VERSION = '2025-07-01';
 const CONFIG_ENTRY = 'gateway-config';
@@ -16,6 +17,8 @@ const STAMP = 'CONFIG_UPDATED_AT';
 
 const TEMPORARY_DATABASE_WARNING = 'This gateway keeps its database on temporary storage (an EmptyDir volume), which a new revision starts empty. '
   + 'Applying a change resets spend totals, spend caps and the audit trail, and developers may need to sign in again.';
+
+const containersOf = (app) => list(app?.properties?.template?.containers);
 
 function fail(status, message, details) { return Object.assign(new Error(message), { status, details }); }
 
@@ -67,6 +70,9 @@ export function describeChanges(before, after) {
     if (was.join('\n') !== now.join('\n')) lines.push(`${p.role}: models ${join(was)} → ${join(now)}`);
     if ((old.desktop ?? null) !== (p.desktop ?? null)) lines.push(`${p.role}: Claude Desktop ${old.desktop === true ? 'on' : old.desktop === false ? 'off' : 'default'} → ${p.desktop === true ? 'on' : p.desktop === false ? 'off' : 'default'}`);
   }
+  // ADR-0014: the soft limit, named the way the console shows it.
+  const soft = (a) => (a?.spendPacing?.softLimitPercent ? `${a.spendPacing.softLimitPercent}% of the monthly cap` : 'off');
+  if (soft(before) !== soft(after)) lines.push(`soft limit: ${soft(before)} → ${soft(after)}`);
   for (const key of ['deployment', 'budgets']) {
     if (JSON.stringify(before?.[key] ?? null) !== JSON.stringify(after?.[key] ?? null)) lines.push(`${key} changed`);
   }
@@ -167,6 +173,11 @@ export function createConfigStore({ arm, resourceId, deployAdmin, topology = 'te
     if (!etag && !modifiedAt) throw fail(502, 'Azure Resource Manager returned neither an ETag nor systemData.lastModifiedAt for the gateway app, so a concurrent change could not be detected; the configuration was not changed');
     const { configContainers, temporaryDatabase } = inspectApp(app);
     if (!configContainers.length) throw fail(409, `no container of ${app.name} mounts the ${CONFIG_ENTRY} secret, so a change would not reach the gateway`);
+    // ADR-0014: with spendPacing the configuration reads ${GATEWAY_ADMIN_PACER_KEY}, and the gateway does not start with an
+    // undefined variable. The installers add it with the admin API; a gateway installed before them has not got it yet.
+    if (admin.spendPacing && !containersOf(app).some((c) => configContainers.includes(c.name) && list(c.env).some((e) => e.name === PACER_ENV))) {
+      throw fail(409, `the gateway has no ${PACER_ENV} variable, which the configuration reads once the soft limit is on; run the installer's app stage once to add it, then turn the soft limit on`);
+    }
     // ADR-0012: the database choice changes the app's containers, which only the move script reshapes. A plain save
     // that changed it would render a store the running app cannot reach.
     const databaseOf = (a) => a?.deployment?.database ?? 'sidecar';

@@ -138,7 +138,7 @@ function Step-App($c) {
         # with Azure unchanged (council round 2).
         $stored = @{}
         if ($existing) {
-            $names = @('jwt-secret'; if (-not $c.Secrets.PgPassword) { 'pg-password' }; if (-not $c.RotateClientSecret) { 'oidc-client-secret' }; if ($c.Telemetry) { 'appinsights-connection' }; if ($c.AdminApi) { 'admin-write-key' })
+            $names = @('jwt-secret'; if (-not $c.Secrets.PgPassword) { 'pg-password' }; if (-not $c.RotateClientSecret) { 'oidc-client-secret' }; if ($c.Telemetry) { 'appinsights-connection' }; if ($c.AdminApi) { 'admin-write-key'; 'admin-pacer-key' })
             foreach ($name in $names) { $stored[$name] = Get-AppSecret $c $name }
         }
         $jwt = $stored['jwt-secret']
@@ -161,6 +161,9 @@ function Step-App($c) {
         # ADR-0008: the admin-ui backend's server-to-server key for the gateway's own spend-limits admin API.
         $adminKey = $stored['admin-write-key']
         if ($c.AdminApi -and -not $adminKey) { $adminKey = New-RandomSecret 32; $secretsChanged = [bool]$existing }
+        # ADR-0014: the spend pacer's key, kept like the admin key.
+        $pacerKey = $stored['admin-pacer-key']
+        if ($c.AdminApi -and -not $pacerKey) { $pacerKey = New-RandomSecret 32; $secretsChanged = [bool]$existing }
     }
     $definition = New-AppDefinition $c
     $json = ConvertTo-Json -InputObject $definition -Depth 20
@@ -168,7 +171,7 @@ function Step-App($c) {
     if (-not (Test-AzPlan)) {
         $json = $json.Replace('__JWT__', $jwt).Replace('__PG__', $pg).Replace('__OIDC__', $oidc)
         if ($c.Telemetry) { $json = $json.Replace('__APPINSIGHTS__', $c.AppInsightsConnection) }
-        if ($c.AdminApi) { $json = $json.Replace('__ADMINKEY__', $adminKey) }
+        if ($c.AdminApi) { $json = $json.Replace('__ADMINKEY__', $adminKey).Replace('__PACERKEY__', $pacerKey) }
     }
     [IO.File]::WriteAllText($file, $json)
     $verb = if ($existing) { 'update' } else { 'create' }

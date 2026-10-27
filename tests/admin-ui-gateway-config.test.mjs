@@ -369,3 +369,26 @@ test('T-115 a save that changes deployment.database without the move is refused 
     assert.equal(calls.filter((c) => c.method === 'PUT').length, 0);
   }
 });
+
+// T-136 (ADR-0014): the rendered configuration reads ${GATEWAY_ADMIN_PACER_KEY} once pacing is on, and the gateway does
+// not start with an undefined variable, so the save needs the variable on the container that mounts the config.
+const withPacing = () => ({ ...structuredClone(contosoAdmin), spendPacing: { softLimitPercent: 80 } });
+
+test('T-136 negative: turning pacing on for a gateway without GATEWAY_ADMIN_PACER_KEY is refused with 409 and nothing is written', async () => {
+  const state = fakeApp({ temporaryDatabase: false });
+  const { s, calls } = store(state);
+  await assert.rejects(s.write({ admin: withPacing(), baseVersion: adminVersion(contosoAdmin) }),
+    (e) => e.status === 409 && /GATEWAY_ADMIN_PACER_KEY/.test(e.message) && /app stage/.test(e.message));
+  assert.equal(calls.filter((c) => c.method === 'PUT').length, 0);
+});
+
+test('T-136 with the variable on the gateway container, the save goes through and the change list names the soft limit', async () => {
+  const state = fakeApp({ temporaryDatabase: false });
+  state.app.properties.template.containers[0].env.push({ name: 'GATEWAY_ADMIN_PACER_KEY', secretRef: 'admin-pacer-key' });
+  const { s, calls } = store(state);
+  await s.write({ admin: withPacing(), baseVersion: adminVersion(contosoAdmin) });
+  assert.equal(calls.filter((c) => c.method === 'PUT').length, 1);
+  assert.match(state.put.properties.configuration.secrets.find((x) => x.name === 'gateway-config').value, /- id: spend-pacer/);
+  assert.ok(describeChanges(contosoAdmin, withPacing()).includes('soft limit: off → 80% of the monthly cap'));
+  assert.ok(describeChanges(withPacing(), contosoAdmin).includes('soft limit: 80% of the monthly cap → off'));
+});

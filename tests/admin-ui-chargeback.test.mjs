@@ -1,10 +1,11 @@
-// T-100, T-101: admin-ui/server/chargeback.mjs - chargeback by business unit from the gateway's /effective rows joined
-// to Entra users by email (ADR-0010, U-89, U-90), and tagging a user's department or cost center.
+// T-100, T-143: admin-ui/server/chargeback.mjs - chargeback by business unit from the gateway's /effective rows joined
+// to Entra users by email (ADR-0010, U-89, U-90), grouped by the business-unit tags kept in the gateway database by
+// object ID (ADR-0015). The Entra attributes in USERS are deliberately different from the tags: they must be ignored.
 // Row shape copied from the live Contoso gateway's /effective answer (tests/admin-ui-web.test.mjs); users invented.
 // CSV neutralisation: https://owasp.org/www-community/attacks/CSV_Injection
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildChargeback, chargebackCsv, collectEffective, listBusinessUnits, tagUser } from '../admin-ui/server/chargeback.mjs';
+import { buildChargeback, chargebackCsv, collectEffective, listBusinessUnits } from '../admin-ui/server/chargeback.mjs';
 
 const row = (sub, email, cents, groups = ['Gateway.Standard'], amount = null, period = 'monthly') => ({
   scope: { type: 'user', user_id: sub }, groups, actor: email ? { type: 'user_actor', user_id: sub, name: `Name ${sub}`, email_address: email } : null,
@@ -12,10 +13,10 @@ const row = (sub, email, cents, groups = ['Gateway.Standard'], amount = null, pe
 });
 
 const USERS = {
-  'ana@contoso.example': { id: 'u1', displayName: 'Ana', userPrincipalName: 'ana@contoso.example', department: 'Engineering', companyName: 'Contoso', officeLocation: 'Pune', jobTitle: 'Dev', employeeOrgData: { costCenter: 'CC-100', division: 'R&D' } },
-  'bo@contoso.example': { id: 'u2', displayName: 'Bo', userPrincipalName: 'bo@contoso.example', department: 'Finance', companyName: 'Contoso', officeLocation: null, jobTitle: null, employeeOrgData: null },
-  'cy@contoso.example': { id: 'u3', displayName: 'Cy', userPrincipalName: 'cy@contoso.example', department: null, companyName: 'Contoso', officeLocation: null, jobTitle: null, employeeOrgData: { costCenter: null, division: null } },
-  'dee@contoso.example': { id: 'u4', displayName: 'Dee', userPrincipalName: 'dee@contoso.example', department: 'Engineering', companyName: 'Contoso', officeLocation: null, jobTitle: null, employeeOrgData: { costCenter: '=HYPERLINK("x")', division: null } },
+  'ana@contoso.example': { id: 'u1', displayName: 'Ana', userPrincipalName: 'ana@contoso.example', department: 'ENTRA-Eng', companyName: 'ENTRA-Co', officeLocation: 'ENTRA-Office', jobTitle: 'Dev', employeeOrgData: { costCenter: 'ENTRA-CC', division: 'ENTRA-Div' } },
+  'bo@contoso.example': { id: 'u2', displayName: 'Bo', userPrincipalName: 'bo@contoso.example', department: 'ENTRA-Fin', companyName: 'ENTRA-Co', officeLocation: null, jobTitle: null, employeeOrgData: null },
+  'cy@contoso.example': { id: 'u3', displayName: 'Cy', userPrincipalName: 'cy@contoso.example', department: 'ENTRA-Cy', companyName: 'ENTRA-Co', officeLocation: null, jobTitle: null, employeeOrgData: { costCenter: null, division: null } },
+  'dee@contoso.example': { id: 'u4', displayName: 'Dee', userPrincipalName: 'dee@contoso.example', department: 'ENTRA-Eng', companyName: 'ENTRA-Co', officeLocation: null, jobTitle: null, employeeOrgData: { costCenter: 'ENTRA-CC2', division: null } },
 };
 
 function fakeGraph(users = USERS) {
@@ -33,6 +34,11 @@ function fakeGraph(users = USERS) {
   }
   return { graph, calls };
 }
+
+// The tags the gateway database holds, by object ID (ADR-0015). Entra's department for u1 is Engineering, its tag is Platform.
+const tag = (department, costCenter = null, more = {}) => ({ department, costCenter, companyName: null, officeLocation: null, division: null, ...more });
+const TAGS = new Map([['u1', tag('Engineering', 'CC-100', { companyName: 'Contoso', officeLocation: 'Pune', division: 'R&D' })], ['u2', tag('Finance')], ['u4', tag('Engineering', '=HYPERLINK("x")')]]);
+const ENTRA_ONLY = new Map();
 
 const ROWS = [
   row('s1', 'Ana@Contoso.example', '1000.5', ['Gateway.Premium'], '5000'),
@@ -54,7 +60,7 @@ test('T-100 collectEffective pages through /effective for one period until next_
 
 test('T-100 groups by department, and every group total adds up to the overall total', async () => {
   const { graph } = fakeGraph();
-  const r = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'department', now: () => new Date('2026-10-24T00:00:00Z') });
+  const r = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'department', tags: TAGS, now: () => new Date('2026-10-24T00:00:00Z') });
   const by = Object.fromEntries(r.groups.map((g) => [g.key, g]));
   assert.equal(by.Engineering.totalCents, 1049.75);
   assert.equal(by.Engineering.users, 2);
@@ -77,36 +83,36 @@ test('T-100 only per-user rows count: an organisation or group row in /effective
   const { graph } = fakeGraph();
   const org = { ...row('org', null, '9999'), scope: { type: 'organization' }, actor: null };
   const group = { ...row('g', null, '5000'), scope: { type: 'group', group: 'Gateway.Standard' }, actor: null };
-  const r = await buildChargeback({ rows: [ROWS[1], org, group], graph, period: 'monthly', groupBy: 'department' });
+  const r = await buildChargeback({ rows: [ROWS[1], org, group], graph, period: 'monthly', groupBy: 'department', tags: TAGS });
   assert.equal(r.totalCents, 250.25);
   assert.equal(r.rows.length, 1);
 });
 
 test('T-100 groups by cost center, division and gateway role', async () => {
   const { graph } = fakeGraph();
-  const cc = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'costCenter' });
+  const cc = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'costCenter', tags: TAGS });
   assert.equal(cc.groups.find((g) => g.key === 'CC-100').totalCents, 1000.5);
-  const role = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'role' });
+  const role = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'role', tags: TAGS });
   assert.equal(role.groups.find((g) => g.key === 'Gateway.Premium').totalCents, 1000.5);
   assert.equal(role.groups.find((g) => g.key === 'Gateway.Premium + Gateway.Standard').totalCents, 49.25);
   assert.equal(role.groups.find((g) => g.key === 'Gateway.Standard').totalCents, 365.25);
-  await assert.rejects(buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'salary' }), (e) => e.status === 400);
-  await assert.rejects(buildChargeback({ rows: ROWS, graph, period: 'yearly', groupBy: 'role' }), (e) => e.status === 400);
+  await assert.rejects(buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'salary', tags: TAGS }), (e) => e.status === 400);
+  await assert.rejects(buildChargeback({ rows: ROWS, graph, period: 'yearly', groupBy: 'role', tags: TAGS }), (e) => e.status === 400);
 });
 
 test('T-100 looks each email up once, case-insensitively', async () => {
   const { graph, calls } = fakeGraph();
-  await buildChargeback({ rows: [...ROWS, row('s7', 'ANA@contoso.example', '1')], graph, period: 'monthly', groupBy: 'department' });
+  await buildChargeback({ rows: [...ROWS, row('s7', 'ANA@contoso.example', '1')], graph, period: 'monthly', groupBy: 'department', tags: TAGS });
   const anaLookups = calls.filter((c) => /\/users\/ana%40contoso\.example/i.test(c.path));
   assert.equal(anaLookups.length, 1);
 });
 
 test('T-100 the CSV neutralises cells that start with = + - @ and quotes commas', async () => {
   const { graph } = fakeGraph();
-  const r = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'costCenter' });
+  const r = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'costCenter', tags: TAGS });
   const csv = chargebackCsv(r);
   const lines = csv.trimEnd().split('\r\n');
-  assert.equal(lines[0], 'period,group,name,email,roles,department,cost_center,spend_usd,cap_usd,resolved');
+  assert.equal(lines[0], 'period,group,name,email,roles,department,cost_center,company,office,division,spend_usd,cap_usd,resolved');
   const dee = lines.find((l) => l.includes('dee@contoso.example'));
   assert.ok(dee.startsWith('monthly,"\'=HYPERLINK(""x"")"'), dee);
   assert.ok(!/(^|,)[=+\-@]/.test(csv.replace(/"/g, '')), 'no cell starts with a formula character');
@@ -114,29 +120,8 @@ test('T-100 the CSV neutralises cells that start with = + - @ and quotes commas'
   assert.match(ana, /,10\.0050,50\.0000,true$/);
 });
 
-test('T-101 tagUser sends only department and costCenter, keeping the division Graph already has', async () => {
-  const { graph, calls } = fakeGraph();
-  const r = await tagUser({ graph }, 'ana@contoso.example', { department: 'Platform', costCenter: 'CC-200', jobTitle: 'ignored' });
-  const patch = calls.find((c) => c.method === 'PATCH');
-  assert.equal(patch.path, '/users/ana%40contoso.example');
-  assert.deepEqual(patch.body, { department: 'Platform', employeeOrgData: { costCenter: 'CC-200', division: 'R&D' } });
-  assert.deepEqual(r, { user: { upn: 'ana@contoso.example', department: 'Platform', costCenter: 'CC-200' } });
-});
-
-test('T-101 tagUser clears with null, refuses values over 64 characters or with control characters, and an empty change', async () => {
-  const { graph, calls } = fakeGraph();
-  await tagUser({ graph }, 'bo@contoso.example', { department: null });
-  assert.deepEqual(calls.find((c) => c.method === 'PATCH').body, { department: null });
-  for (const bad of [{ department: 'x'.repeat(65) }, { costCenter: 'a\nb' }, {}, { department: 5 }]) {
-    const g = fakeGraph();
-    await assert.rejects(tagUser({ graph: g.graph }, 'bo@contoso.example', bad), (e) => e.status === 400, JSON.stringify(bad));
-    assert.equal(g.calls.filter((c) => c.method === 'PATCH').length, 0);
-  }
-  await assert.rejects(tagUser({ graph }, 'nobody@contoso.example', { department: 'X' }), (e) => e.status === 404);
-});
-
-// T-107: business units are the Entra department of every developer holding a gateway role, spend or not, so a unit
-// can be created and filled before anyone in it has used the gateway.
+// T-107, T-143: business units are the department tag of every developer holding a gateway role, spend or not, so a
+// unit can be created and filled before anyone in it has used the gateway.
 test('T-107 listBusinessUnits lists each role holder once with merged roles, groups them by department, and skips non-users', async () => {
   const byId = { u1: USERS['ana@contoso.example'], u3: USERS['cy@contoso.example'], u4: USERS['dee@contoso.example'] };
   const { graph, calls } = fakeGraph(byId);
@@ -147,8 +132,8 @@ test('T-107 listBusinessUnits lists each role holder once with merged roles, gro
     { role: 'Gateway.Standard', name: 'Dee', principalId: 'u4' },
     { role: 'Gateway.Standard', name: 'Platform team', principalId: 'g9' },
   ];
-  const r = await listBusinessUnits({ graph, developers });
-  assert.deepEqual(r.users.map((u) => [u.id, u.upn, u.name, u.roles, u.department, u.costCenter]), [
+  const r = await listBusinessUnits({ graph, developers, tags: TAGS });
+  assert.deepEqual(r.users.map((u) => [u.id, u.upn, u.name, u.roles, u.department, u.costCenter]), [ // tags, not ENTRA-*
     ['u1', 'ana@contoso.example', 'Ana', ['Gateway.Premium', 'Gateway.Standard'], 'Engineering', 'CC-100'],
     ['u4', 'dee@contoso.example', 'Dee', ['Gateway.Standard'], 'Engineering', '=HYPERLINK("x")'],
     ['u3', 'cy@contoso.example', 'Cy', ['Gateway.Standard'], null, null],
@@ -157,4 +142,36 @@ test('T-107 listBusinessUnits lists each role holder once with merged roles, gro
   assert.equal(r.unassigned, 1);
   assert.deepEqual(r.skipped, [{ principalId: 'g9', name: 'Platform team' }]);
   assert.equal(calls.filter((c) => c.path.startsWith('/users/u1')).length, 1, 'one Graph lookup per principal');
+});
+
+test('T-143 company, office and division group by their tags; a user with no tag is unassigned', async () => {
+  const { graph } = fakeGraph();
+  for (const [groupBy, key] of [['companyName', 'Contoso'], ['officeLocation', 'Pune'], ['division', 'R&D']]) {
+    const r = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy, tags: TAGS });
+    assert.equal(r.groups.find((g) => g.key === key)?.totalCents, 1000.5, groupBy);
+    assert.equal(r.groups.find((g) => g.key === '(unassigned)')?.totalCents, 399.5, `${groupBy}: bo, cy and dee have no ${groupBy} tag`);
+    assert.ok(!r.groups.some((g) => /^ENTRA-/.test(g.key)), `${groupBy}: no Entra attribute is used`);
+  }
+  const ana = (await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'department', tags: TAGS })).rows.find((x) => x.userId === 's1');
+  assert.deepEqual([ana.department, ana.costCenter, ana.companyName, ana.officeLocation, ana.division, ana.objectId], ['Engineering', 'CC-100', 'Contoso', 'Pune', 'R&D', 'u1']);
+});
+
+test('T-143 Graph is only read: chargeback and business units send no write to Entra', async () => {
+  const { graph, calls } = fakeGraph();
+  await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'department', tags: TAGS });
+  await listBusinessUnits({ graph: fakeGraph({ u1: USERS['ana@contoso.example'] }).graph, developers: [{ role: 'Gateway.Standard', name: 'Ana', principalId: 'u1' }], tags: TAGS });
+  assert.deepEqual([...new Set(calls.map((c) => c.method))], ['GET']);
+  assert.ok(calls.every((c) => !/department|employeeOrgData|companyName|officeLocation/.test(c.path)), 'no Entra business attribute is even selected');
+});
+
+test('T-143 without the tag store, grouping by a tag reports everyone unassigned and says why; role still groups', async () => {
+  const { graph } = fakeGraph();
+  const off = { unavailable: true, reason: 'Business-unit tags are kept in the gateway\'s managed PostgreSQL.' };
+  const dept = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'department', tags: off });
+  assert.deepEqual(dept.groups.map((g) => g.key).sort(), ['(unassigned)', '(unresolved)']);
+  assert.ok(dept.notes.includes(off.reason));
+  const role = await buildChargeback({ rows: ROWS, graph, period: 'monthly', groupBy: 'role', tags: off });
+  assert.equal(role.groups.find((g) => g.key === 'Gateway.Premium').totalCents, 1000.5);
+  const units = await listBusinessUnits({ graph: fakeGraph({ u1: USERS['ana@contoso.example'] }).graph, developers: [{ role: 'Gateway.Standard', name: 'Ana', principalId: 'u1' }], tags: off });
+  assert.deepEqual([units.users[0].department, units.units], [null, []]);
 });

@@ -590,3 +590,28 @@ test('T-78 -Step verify reads the entra step, for the role holders it checks', {
   assert.equal(r.status, 0, r.out);
   assert.match(r.out, /== entra \(read only, for the names later steps use\)/);
 });
+// T-137 (ADR-0014): with the admin API on, the private app also carries the pacer key, and a later run keeps its value.
+test('T-137 the private Container App definition holds admin-pacer-key and GATEWAY_ADMIN_PACER_KEY only with the admin API', { skip }, () => {
+  const run = (adminApi) => {
+    const ps = `Import-Module '${path.join(repo, 'infra', 'azure-private', 'lib', 'AppDefinition.psm1')}';
+      $c = @{ Location = 'eastus2'; IdentityId = '/id/uai'; IdentityClientId = 'client-1'; EnvironmentId = '/env/1'; Acr = 'acr1'; Fqdn = 'ca.${DOMAIN}';
+        Subnets = @{ aca = '10.40.0.0/23' }; TenantId = 't-1'; AppId = 'app-1'; AllowedEmailDomain = 'contoso.example'; PostgresUser = 'gatewayadmin'; Postgres = 'psql-1';
+        Foundry = 'ai-1'; MaxUpstreamRequests = 256; ConfigFile = '${path.join(repo, 'config', 'gateway.azure-private.yaml')}'; Image = 'acr1.azurecr.io/claude-gateway@sha256:1';
+        Cpu = '1.0'; Memory = '2Gi'; MinReplicas = 2; MaxReplicas = 10; ConcurrentRequests = 150; AdminApi = $${adminApi} };
+      ConvertTo-Json -Depth 20 -InputObject (New-AppDefinition $c)`;
+    const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    const d = JSON.parse(r.stdout);
+    return { env: Object.fromEntries(d.properties.template.containers[0].env.map((e) => [e.name, e.value ?? `secretref:${e.secretRef}`])),
+      secrets: Object.fromEntries(d.properties.configuration.secrets.map((s) => [s.name, s.value])) };
+  };
+  const on = run('true');
+  assert.equal(on.env.GATEWAY_ADMIN_PACER_KEY, 'secretref:admin-pacer-key');
+  assert.equal(on.secrets['admin-pacer-key'], '__PACERKEY__');
+  const off = run('false');
+  assert.equal(off.env.GATEWAY_ADMIN_PACER_KEY, undefined);
+  assert.equal(off.secrets['admin-pacer-key'], undefined);
+  const steps = fs.readFileSync(path.join(repo, 'infra', 'azure-private', 'lib', 'Steps.App.psm1'), 'utf8');
+  assert.match(steps, /if \(\$c\.AdminApi\) \{ 'admin-write-key'; 'admin-pacer-key' \}/, 'a later run reads the stored pacer key');
+  assert.match(steps, /\$json = \$json\.Replace\('__ADMINKEY__', \$adminKey\)\.Replace\('__PACERKEY__', \$pacerKey\)/);
+});

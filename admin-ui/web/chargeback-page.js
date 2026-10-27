@@ -1,6 +1,7 @@
-// The Chargeback page: spend per business unit for the current period to date (GET /api/chargeback), grouped by an
-// Entra ID attribute or by gateway role, the per-user rows behind it, CSV export, and - when admin-ui may write users
-// - tagging a user's department and cost center (PATCH /api/users/{upn}). Every amount is the API's own.
+// The Chargeback page: spend per business unit for the current period to date (GET /api/chargeback), grouped by a
+// business-unit tag or by gateway role, the per-user rows behind it, CSV export, and the Business units card, which sets
+// each user's five tags in the gateway database (PUT /api/user-tags/{objectId}, POST /api/user-tags/import; ADR-0015).
+// Nothing here writes to Entra ID. Every amount is the API's own.
 const chargebackPage = (() => {
   const state = { period: 'monthly', groupBy: 'department', group: null, editing: null };
   const cb = () => chargebackView;
@@ -32,16 +33,17 @@ const chargebackPage = (() => {
         return;
       }
       const editable = units.rows.some((r) => r.editable);
+    const importCsv = editable ? importButton() : null;
       const datalist = el('datalist', { id: 'business-unit-options' }, units.options.map((o) => el('option', { value: o })));
       const chips = units.units.length
         ? el('div', { class: 'pills', role: 'list', 'aria-label': 'Business units' }, units.units.map((u) => el('span', { role: 'listitem' }, [ui.pill(`${u.name} · ${u.usersText}`, 'info')])))
         : el('p', { class: 'muted', text: 'No business units yet.' });
+      // The row actions follow the user, so Edit, Save and Cancel stay in view when the five tags make the table wide.
       const columns = [
         { label: 'User', render: (r) => el('div', { class: 'who' }, [el('strong', { text: r.name }), r.detail ? el('span', { text: r.detail }) : null]) },
-        { label: 'Business unit (department)', render: (r) => tagCell(r, 'department') },
-        { label: 'Cost center', render: (r) => tagCell(r, 'costCenter') },
-        { label: 'Roles', render: (r) => r.roles },
         editable ? { label: '', className: 'actions', render: (r) => actionsCell(r) } : null,
+        ...cb().TAGS.map((tag) => ({ label: tag.label, render: (r) => tagCell(r, tag.key) })),
+        { label: 'Roles', render: (r) => r.roles },
       ].filter(Boolean);
       unitsBody.replaceChildren(
         datalist,
@@ -49,9 +51,10 @@ const chargebackPage = (() => {
           chips,
           units.unassignedText ? el('p', { class: 'note warn' }, [ui.icon('warning', 14), el('span', { text: units.unassignedText })]) : null,
           units.skippedText ? el('p', { class: 'muted small', text: units.skippedText }) : null,
-          editable ? null : el('p', { class: 'muted small', text: cb().tagHint({ canTag: false }) }),
+          editable ? el('div', { class: 'import-row' }, [importCsv, el('span', { class: 'muted small', text: 'CSV columns: user (UPN, email or object ID), department, costCenter, company, office, division. An empty cell leaves that tag unchanged.' })])
+            : el('p', { class: 'muted small', text: cb().tagHint({ canTag: false, tagsReason: units.tagsReason }) }),
         ]),
-        units.rows.length ? ui.table({ caption: 'Gateway users and their business units', columns, rows: units.rows }) : ui.empty('No gateway users', 'Assign a gateway role on Access & models first.'));
+        units.rows.length ? ui.table({ caption: 'Gateway users and their business units', columns, rows: units.rows, className: 'tags-table' }) : ui.empty('No gateway users', 'Assign a gateway role on Access & models first.'));
     }
 
     function redraw() {
@@ -137,16 +140,15 @@ const chargebackPage = (() => {
           el('strong', {}, [r.name, r.unresolved ? ui.pill('Unresolved', 'warn') : null]), r.detail ? el('span', { text: r.detail }) : null,
         ]) },
         own ? null : { label: groupMeta.label, render: (r) => (r.special ? el('span', { class: 'muted', text: r.group }) : r.group) },
-        { label: 'Department', render: (r) => tagCell(r, 'department') },
-        { label: 'Cost center', render: (r) => tagCell(r, 'costCenter') },
+        { label: 'Department', render: (r) => shown(r, 'department') },
+        { label: 'Cost center', render: (r) => shown(r, 'costCenter') },
         { label: 'Roles', render: (r) => r.roles },
         { label: 'Spend', className: 'num', render: (r) => r.spend },
         { label: 'Cap', className: 'num', render: (r) => el('div', { class: 'cap-cell' }, [r.cap, r.capPct === null ? null : el('span', { class: 'muted small', text: `${r.capPct}% used` })]) },
-        report.canTag ? { label: '', className: 'actions', render: (r) => actionsCell(r) } : null,
       ].filter(Boolean);
       return ui.card({
         title: label ? `Users · ${label}` : 'Users', className: 'flush',
-        description: hint ?? 'Department and cost center are the users’ Entra ID attributes. Edit sets them in Entra ID.',
+        description: hint ?? 'Department and cost center are the users’ business-unit tags. Set them under Business units below.',
         actions: [clear].filter(Boolean),
         content: rows.length
           ? ui.table({ caption: 'Spend per user', columns, rows, rowAttrs: (r) => ({ class: r.unresolved ? 'row-warn' : null }) })
@@ -154,9 +156,37 @@ const chargebackPage = (() => {
       });
     }
 
+    function shown(r, key) {
+      if (r.unresolved) return el('span', { class: 'muted', text: '—' });
+      return r[key] ? r[key] : el('span', { class: 'muted', text: 'Not set' });
+    }
+
+    function importButton() {
+      const input = el('input', { type: 'file', accept: '.csv,text/csv', class: 'visually-hidden', 'aria-label': 'CSV file of business-unit tags' });
+      const button = ui.button('Import CSV', { kind: 'secondary', size: 'sm', iconName: 'upload', onclick: () => input.click() });
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        ui.busy(button, true, 'Importing…');
+        try {
+          const result = await api.post('/api/user-tags/import', { csv: await file.text() });
+          const skipped = result.skipped ?? [];
+          ui.toast(`Imported ${result.updated?.length ?? 0} user(s).${skipped.length ? ` Skipped ${skipped.length}: ${skipped.slice(0, 3).map((s) => `line ${s.line} (${s.reason})`).join('; ')}${skipped.length > 3 ? '…' : ''}` : ''}`, skipped.length ? 'warning' : 'success');
+          await Promise.all([load(), loadUnits()]);
+        } catch (err) {
+          ui.toast(`Could not import the CSV: ${err.message}`, 'error');
+        } finally {
+          ui.busy(button, false);
+          input.value = '';
+        }
+      });
+      return el('span', {}, [button, input]);
+    }
+
     function tagCell(r, key) {
       if (state.editing === r.userId) {
-        const input = el('input', { class: 'compact', name: key, value: r[key], 'aria-label': `${key === 'department' ? 'Department' : 'Cost center'} for ${r.name}`, 'data-tag': key, maxlength: key === 'department' ? '64' : null, list: key === 'department' ? 'business-unit-options' : null });
+        const label = cb().TAGS.find((tag) => tag.key === key)?.label ?? key;
+        const input = el('input', { class: 'compact', name: key, value: r[key], 'aria-label': `${label} for ${r.name}`, 'data-tag': key, maxlength: '64', list: key === 'department' ? 'business-unit-options' : null });
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') { state.editing = null; redraw(); }
           if (e.key === 'Enter') { e.preventDefault(); save(r, e.currentTarget.closest('tr')); }
@@ -168,9 +198,9 @@ const chargebackPage = (() => {
     }
 
     function actionsCell(r) {
-      if (!r.editable) return el('span', { class: 'muted small', title: UNRESOLVED_TEXT, text: r.unresolved ? 'Not in Entra' : '' });
+      if (!r.editable) return el('span', { class: 'muted small', text: '' });
       if (state.editing !== r.userId) {
-        return ui.button('Edit', { kind: 'ghost', size: 'sm', iconName: 'edit', 'aria-label': `Edit department and cost center for ${r.name}`, onclick: () => {
+        return ui.button('Edit', { kind: 'ghost', size: 'sm', iconName: 'edit', 'aria-label': `Edit business-unit tags for ${r.name}`, onclick: () => {
           state.editing = r.userId;
           redraw();
           ctx.root.querySelector(`tr input[data-tag="department"]`)?.focus();
@@ -191,8 +221,8 @@ const chargebackPage = (() => {
       if (!patch) { state.editing = null; redraw(); return; }
       if (btn) ui.busy(btn, true, 'Saving…');
       try {
-        await api.patch(`/api/users/${encodeURIComponent(r.upn)}`, patch);
-        ui.toast(`Saved for ${r.name}. Entra ID may take a moment to return the new values.`);
+        await api.put(`/api/user-tags/${encodeURIComponent(r.userId)}`, patch);
+        ui.toast(`Saved for ${r.name}.`);
         await Promise.all([load(), loadUnits()]);
       } catch (err) {
         if (btn) ui.busy(btn, false);
@@ -217,13 +247,13 @@ const chargebackPage = (() => {
     });
 
     ctx.root.replaceChildren(
-      ui.pageHeader({ title: 'Chargeback', description: 'Spend per business unit, from the gateway’s per-user totals and the users’ Entra ID attributes.', actions: [exportCsv] }),
+      ui.pageHeader({ title: 'Chargeback', description: 'Spend per business unit, from the gateway’s per-user totals and the business-unit tags set on this page.', actions: [exportCsv] }),
       el('div', { class: 'toolbar' }, [ui.field({ label: 'Period', control: period }), ui.field({ label: 'Group by', control: groupBy }), stamp]),
       ui.banner('info', ['Amounts are the gateway’s list-price estimates for the current period to date, not the Azure invoice. Past periods are not available from the gateway.']),
       body,
       ui.card({
         title: 'Business units',
-        description: 'A business unit is the user’s Entra ID department; Group by Department uses it. Everyone with a gateway role is listed, spend or not. Edit a user and type a new name to create a unit, or pick an existing one.',
+        description: 'A business unit is the user’s department tag; Group by uses the five tags. Everyone with a gateway role is listed, spend or not. Edit a user and type a new name to create a unit, or pick an existing one. Tags are kept in the gateway database; Entra ID is not changed.',
         content: unitsBody,
       }));
     await Promise.all([load(), loadUnits()]);

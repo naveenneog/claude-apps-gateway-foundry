@@ -20,20 +20,25 @@ export function actionAllowed(permissions, action) {
 const GRAPH_GRANT = 'No Microsoft Entra admin-center portal workflow is available for granting Microsoft Graph application permissions to a managed identity. A Privileged Role Administrator or Global Administrator must create the app-role assignment through Microsoft Graph: https://learn.microsoft.com/en-us/graph/permissions-grant-via-msgraph.';
 const SIGN_IN_GRANT = 'If the admin-ui sign-in app registration or role does not exist, first create the app registration in Microsoft Entra admin center > App registrations, add an enabled user role with value AdminUi.Admin under App roles, enable ID token issuance, and add the Web redirect URI https://<ca-admin-ui-fqdn>/.auth/login/aad/callback. Then in Azure Portal, open Container Apps > ca-admin-ui > Security > Authentication and enable the Microsoft Entra provider with that registration. Once the role exists, assign it in Microsoft Entra admin center > Enterprise applications > the admin-ui app > Users and groups > Add user/group. See https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra and https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal.';
 
-/** graphToken: async () => an app-only Graph token. armPermissions: async () => [{actions, notActions}] on the gateway app. */
-export async function capabilities({ graphToken, armPermissions, signIn }) {
+/**
+ * graphToken: async () => an app-only Graph token. armPermissions: async () => [{actions, notActions}] on the gateway app.
+ * tagsStatus: async () => {available, reason} of the business-unit tag store in the gateway database (ADR-0015).
+ */
+export async function capabilities({ graphToken, armPermissions, signIn, tagsStatus = async () => ({ available: false, reason: 'Business-unit tags are not configured.' }) }) {
   const problems = [];
   let roles = [];
   let perms = [];
   try { roles = tokenRoles(await graphToken()); } catch (e) { problems.push(`Microsoft Graph token: ${e.message}`); }
   try { perms = await armPermissions(); } catch (e) { problems.push(`Azure permissions on the gateway app: ${e.message}`); }
+  let tags;
+  try { tags = await tagsStatus(); } catch (e) { tags = { available: false, reason: e.message }; }
+  if (!tags.available && tags.reason) problems.push(`Business-unit tags: ${tags.reason}`);
   const has = (...names) => names.some((n) => roles.includes(n));
   const graph = {
     readUsers: has('User.Read.All', 'User.ReadWrite.All', 'Directory.Read.All', 'Directory.ReadWrite.All'),
     assignRoles: has('AppRoleAssignment.ReadWrite.All'),
     readApps: has('Application.Read.All', 'Application.ReadWrite.OwnedBy', 'Application.ReadWrite.All', 'Directory.Read.All'),
     writeOwnedApps: has('Application.ReadWrite.OwnedBy', 'Application.ReadWrite.All'),
-    writeUsers: has('User.ReadWrite.All', 'Directory.ReadWrite.All'),
   };
   const arm = {
     readGateway: actionAllowed(perms, 'Microsoft.App/containerApps/read'),
@@ -51,8 +56,9 @@ export async function capabilities({ graphToken, armPermissions, signIn }) {
       unlocks: "Listing the gateway's app roles on the Roles page.", howToGrant: GRAPH_GRANT },
     { key: 'graph.writeOwnedApps', label: 'Application.ReadWrite.OwnedBy (Microsoft Graph), as an owner of the gateway app registration', granted: graph.writeOwnedApps,
       unlocks: 'Creating app roles on the Roles page.', howToGrant: `${GRAPH_GRANT} Add admin-ui as an owner of the gateway app registration in Entra admin center > App registrations > the gateway app > Owners.` },
-    { key: 'graph.writeUsers', label: 'User.ReadWrite.All (Microsoft Graph)', granted: graph.writeUsers,
-      unlocks: "Setting a user's department or cost center from the Chargeback page.", howToGrant: `${GRAPH_GRANT} Without it, set these in the Microsoft Entra admin center > Users > the user > Properties.` },
+    { key: 'database.tags', label: 'Business-unit tags in the gateway database', granted: tags.available === true,
+      unlocks: "Setting each user's department, cost center, company, office and division on the Chargeback page, without writing to Entra ID.",
+      howToGrant: "Tags are kept in the gateway's managed PostgreSQL, which admin-ui reads with its Container Apps Contributor role on the gateway app. A gateway on the in-app database needs the managed database option: see docs/learn/how-to-install-stage-by-stage.md, Choose the database." },
     { key: 'arm.writeGateway', label: 'Container Apps Contributor on the gateway app (Azure RBAC)', granted: arm.writeGateway,
       unlocks: 'Reading and saving the gateway configuration on the Access & models page.', howToGrant: 'Azure Portal: open the gateway Container App > Access control (IAM) > Add role assignment > Container Apps Contributor > select the id-admin-ui managed identity. Keep the scope at the gateway app. The person assigning it needs Owner or User Access Administrator. See https://learn.microsoft.com/en-us/azure/role-based-access-control/role-assignments-portal.' },
   ];

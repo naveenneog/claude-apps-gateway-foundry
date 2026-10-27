@@ -66,6 +66,9 @@ function New-AppDefinition($c) {
         # gateway's own spend-limits admin API (x-api-key, matched against admin.write_keys in gateway.yaml).
         $env += @{ name = 'GATEWAY_ADMIN_WRITE_KEY'; secretRef = 'admin-write-key' }
         $secrets += @{ name = 'admin-write-key'; value = '__ADMINKEY__' }
+        # ADR-0014: the spend pacer's key, which the configuration reads only once the soft limit is on.
+        $env += @{ name = 'GATEWAY_ADMIN_PACER_KEY'; secretRef = 'admin-pacer-key' }
+        $secrets += @{ name = 'admin-pacer-key'; value = '__PACERKEY__' }
     }
     $probe = {
         param($type, $path, $extra)

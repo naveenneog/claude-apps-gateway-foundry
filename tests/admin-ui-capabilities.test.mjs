@@ -27,7 +27,7 @@ test('T-102 each capability is granted exactly when its Graph role or ARM action
   const signIn = { mode: 'required', user: { name: 'A', upn: 'a@x' }, isAdmin: true };
   const none = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: async () => [], signIn });
   assert.ok(none.items.every((i) => i.key === 'signIn' || i.granted === false), JSON.stringify(none.items));
-  assert.deepEqual(none.graph, { readUsers: false, assignRoles: false, readApps: false, writeOwnedApps: false, writeUsers: false });
+  assert.deepEqual(none.graph, { readUsers: false, assignRoles: false, readApps: false, writeOwnedApps: false });
   assert.deepEqual(none.arm, { readGateway: false, writeGateway: false });
 
   const all = await capabilities({
@@ -35,7 +35,7 @@ test('T-102 each capability is granted exactly when its Graph role or ARM action
     armPermissions: async () => [{ actions: ['Microsoft.App/containerApps/*'], notActions: [] }],
     signIn,
   });
-  assert.deepEqual(all.graph, { readUsers: true, assignRoles: true, readApps: true, writeOwnedApps: true, writeUsers: true });
+  assert.deepEqual(all.graph, { readUsers: true, assignRoles: true, readApps: true, writeOwnedApps: true });
   assert.deepEqual(all.arm, { readGateway: true, writeGateway: true });
   for (const item of all.items) {
     assert.equal(typeof item.label, 'string');
@@ -72,4 +72,19 @@ test('T-102 a failing token or permissions call reports the capability as missin
   assert.equal(r.items.find((i) => i.key === 'signIn').granted, false);
   const forged = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: async () => [], signIn: { mode: 'off', user: null, isAdmin: true } });
   assert.equal(forged.items.find((i) => i.key === 'signIn').granted, false, 'admin sign-in is never granted while sign-in is off');
+});
+
+test('T-146 the permissions view does not ask for User.ReadWrite.All, and reports the business-unit tag store instead', async () => {
+  const signIn = { mode: 'required', user: { name: 'A', upn: 'a@x' }, isAdmin: true };
+  const base = { graphToken: async () => jwt({ roles: ['User.Read.All'] }), armPermissions: async () => [], signIn };
+  const on = await capabilities({ ...base, tagsStatus: async () => ({ available: true }) });
+  assert.ok(!JSON.stringify(on.items).includes('User.ReadWrite.All'), 'no item names User.ReadWrite.All');
+  const tags = on.items.find((i) => i.key === 'database.tags');
+  assert.equal(tags.granted, true);
+  assert.match(tags.unlocks, /department.*cost center.*company.*office.*division/i);
+  const off = await capabilities({ ...base, tagsStatus: async () => ({ available: false, reason: 'needs the managed database' }) });
+  const offItem = off.items.find((i) => i.key === 'database.tags');
+  assert.equal(offItem.granted, false);
+  assert.match(offItem.howToGrant, /managed database/);
+  assert.ok(off.problems.some((p) => /needs the managed database/.test(p)));
 });

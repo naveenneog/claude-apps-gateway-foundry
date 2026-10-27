@@ -18,14 +18,58 @@ including the comparison with the Azure API Management (APIM) gateway.
 | Use Claude Code on a Windows machine through a gateway someone else installed | [Quickstart: connect Claude Code on Windows](docs/learn/quickstart-developer.md) | A few minutes |
 | Run a gateway that is already installed: models, access, budgets, chargeback | [Use the admin console](docs/learn/how-to-use-admin-console.md) | — |
 | Install a gateway with no public address, reached over VPN or ExpressRoute | [Tutorial: deploy in a network-restricted environment](docs/learn/tutorial-deploy-network-restricted.md) | Longer: it builds the network too |
+| Group developers into departments or cost centers for chargeback, or give a whole team access with an Entra group | [Group developers into departments and teams](docs/learn/how-to-organize-departments.md) | — |
+| Choose what Claude Desktop shows each role (Chat, Cowork, Code) | [Claude Desktop: Chat, Cowork and Code](docs/learn/how-to-admin-configure.md#claude-desktop-chat-cowork-and-code) | — |
+| Slow spend down before a monthly cap is reached | [Pace the last part of a monthly cap with a soft limit](docs/learn/how-to-admin-configure.md#pace-the-last-part-of-a-monthly-cap-with-a-soft-limit) | — |
 | Look up a term | [Glossary](docs/learn/glossary.md) | — |
 
 The first tutorial needs Owner on an Azure subscription, a Microsoft Foundry account with Claude models deployed, and
 PowerShell 7, Node.js 22, the Azure CLI and Git on the machine that runs it; its "Before you begin" section lists each
-role and why. Developer machines run Windows, and the gateway accepts connections from one public address range. Not
-yet tested: an Intune assignment in a real tenant, and Claude Desktop through this gateway (docs/UNKNOWNS.md, U-106 and
-U-107).
+role and why. Developer machines run Windows, and the gateway accepts connections from one public address range. Claude Desktop through this gateway was tested on
+2026-10-26 (docs/UNKNOWNS.md, U-106). Not yet tested: an Intune assignment in a real tenant (docs/UNKNOWNS.md, U-107).
 
+## Start the deployment
+
+These are the tutorial's commands in order, for a reader who has met its
+[Before you begin](docs/learn/tutorial-first-install.md#before-you-begin) list. The tutorial explains each value and
+what each command prints. In PowerShell 7, from a folder that holds no other copy of the repository:
+
+```powershell
+git clone https://github.com/naveenneog/claude-apps-gateway-foundry.git
+Set-Location claude-apps-gateway-foundry
+az login
+az account set --subscription "<subscription name or ID>"
+az extension add --name containerapp --upgrade
+
+$rg = 'rg-claude-gw-eval'
+$foundryRg = '<resource group of your Foundry account>'
+$foundry = '<name of your Foundry account>'
+$admins = az account show --query user.name -o tsv
+$ip = Invoke-RestMethod https://api.ipify.org
+$cidr = "$ip/32"
+
+az cognitiveservices account deployment list -g $foundryRg -n $foundry --query "[].{deployment:name,model:properties.model.name}" -o table
+Copy-Item config/gateway-admin.example.json config/gateway-admin.azure-eval.json
+notepad config/gateway-admin.azure-eval.json
+node scripts/admin/new-gateway-config.mjs --topology test --admin config/gateway-admin.azure-eval.json --out config/gateway.azure-eval.yaml
+
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -DatabaseLocation centralus -Plan
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -DatabaseLocation centralus
+```
+
+| Step | What it does | Tutorial section |
+|---|---|---|
+| `git clone` to `az extension add` | Gets the files and signs in to the subscription the install goes into | [Get the files and sign in to Azure](docs/learn/tutorial-first-install.md#get-the-files-and-sign-in-to-azure) |
+| `$rg` to `$cidr` | Names the new resource group, the Foundry account, the console's administrators and the address range that may connect; `"$ip/32"` admits this machine only | [Set the values every command uses](docs/learn/tutorial-first-install.md#set-the-values-every-command-uses) |
+| `deployment list` | Lists the Claude deployment names the admin file needs | [Find your Claude deployments in Foundry](docs/learn/tutorial-first-install.md#find-your-claude-deployments-in-foundry) |
+| `Copy-Item` to `new-gateway-config.mjs` | Copies the example admin file, opens it to set the deployment names, and checks it | [Write the admin file](docs/learn/tutorial-first-install.md#write-the-admin-file) |
+| `Install-ClaudeGateway.ps1 ... -Plan` | Prints every command the install would run and changes nothing | [Preview the install](docs/learn/tutorial-first-install.md#preview-the-install) |
+| `Install-ClaudeGateway.ps1` | Installs the gateway, its database and the admin console, and prints their addresses | [Run the install](docs/learn/tutorial-first-install.md#run-the-install) |
+
+After the install: [open the admin console](docs/learn/tutorial-first-install.md#open-the-admin-console),
+[give developers access](docs/learn/tutorial-first-install.md#give-developers-access) and
+[onboard developers](docs/learn/tutorial-first-install.md#onboard-developers). A stage that stops is named with its fix
+in the table under [Run the install](docs/learn/tutorial-first-install.md#run-the-install).
 The tutorial and the pages it links are all a first install needs. The sections below describe how the repository is
 built and tested, using its record identifiers: ADR-n decisions, P-n work packets, T-n tests and U-n unknowns
 ([glossary](docs/learn/glossary.md#repository-records)).

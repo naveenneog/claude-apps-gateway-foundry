@@ -38,7 +38,7 @@ deployment only `budgets` and `admin-ui` apply.
 | Task | Needs |
 |---|---|
 | Every stage | PowerShell 7, Node.js 22 or later, this repository, and the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) signed in to the tenant and subscription of the deployment: `az login`, then `az account set --subscription "<name or ID>"`; `az account show` names the subscription the stages use |
-| `base`, `app` | Owner on the subscription: `base` grants the gateway's identity a role on the Foundry account, which may be in another resource group (infra/azure-test/gateway-test.json:106-142) |
+| `base`, `app` | Owner on the subscription: `base` grants the gateway's identity a role on the Foundry account, which may be in another resource group (infra/azure-test/gateway-test.json:107-143) |
 | `entra` | An account that may register applications in the tenant (docs/UNKNOWNS.md, U-1) |
 | `budgets` | The gateway deployed with `deployment.adminApi: true`; the `app` stage creates the key it reads (infra/azure-test/deploy.mjs:262-264) |
 | `admin-ui`'s Graph grant | Privileged Role Administrator, or Global Administrator: Microsoft names Privileged Role Administrator for granting Microsoft Graph permissions to a managed identity ([grant API permissions to managed identities](https://learn.microsoft.com/en-us/powershell/entra-powershell/grant-api-permissions-managed-identity)) |
@@ -186,7 +186,7 @@ node scripts/admin/new-gateway-config.mjs --topology test --admin config/gateway
 ```
 
 The rendering is a local file and has no portal equivalent. A refused admin file is reported field by field, and
-nothing is written (scripts/admin/new-gateway-config.mjs:30-84).
+nothing is written (scripts/admin/new-gateway-config.mjs:31-85).
 
 ## base
 
@@ -201,7 +201,7 @@ node infra/azure-test/deploy.mjs --tester-cidr $cidr --step base --resource-grou
 
 The resource group carries a `purpose` and a `runId` tag that every later run checks (infra/azure-test/deploy.mjs:131-143).
 The template derives the registry's and the workspace's names from the resource group's ID
-(infra/azure-test/gateway-test.json:28-31), so the way to create the same resources by hand is to deploy that template.
+(infra/azure-test/gateway-test.json:29-32), so the way to create the same resources by hand is to deploy that template.
 
 # [Azure portal](#tab/portal-base)
 
@@ -305,7 +305,7 @@ node infra/azure-test/deploy.mjs --tester-cidr $cidr --step app --resource-group
 ```
 
 Before it changes anything, the stage stops when the rendering references a `${VAR}` the template does not set,
-because the gateway would not boot (infra/azure-test/deploy.mjs:344-345), and when the live app holds secrets or
+because the gateway would not boot (infra/azure-test/deploy.mjs:346-347), and when the live app holds secrets or
 variables the template does not define, which a redeploy would delete (infra/azure-test/deploy.mjs:255-260). It
 generates the admin API key once and keeps the live one on every later run (infra/azure-test/deploy.mjs:264).
 
@@ -398,8 +398,8 @@ The Container App and its identity can be deployed from the portal; the Graph gr
    The four IDs are `AppRoleAssignment.ReadWrite.All`, `Application.Read.All`, `User.Read.All` and
    `Application.ReadWrite.OwnedBy`, Microsoft Graph's own app roles, the same in every tenant
    ([permissions reference](https://learn.microsoft.com/en-us/graph/permissions-reference)). `Deploy-AdminUi.ps1`
-   grants the same four, and `User.ReadWrite.All` (`741f803b-c850-494e-b5df-cde7c675a1ca`) as well with
-   `-GrantUserWrite` (`admin-ui/infra/Deploy-AdminUi.ps1`, lines 99-105). The assignment is posted to Microsoft Graph's own
+   grants the same four (`admin-ui/infra/Deploy-AdminUi.ps1`, lines 95-100); it does not grant `User.ReadWrite.All`,
+   because business-unit tags are kept in the gateway database (ADR-0015). The assignment is posted to Microsoft Graph's own
    service principal, the resource
    ([POST appRoleAssignedTo](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignedto)).
    `Application.ReadWrite.OwnedBy` also needs the admin-ui identity as an owner of the gateway's app registration,

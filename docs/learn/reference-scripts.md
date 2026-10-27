@@ -94,12 +94,12 @@ The admin scripts reuse the deployment's libraries in `infra/azure-test/lib`
 
 Renders `config/gateway.azure-test.yaml` from `config/gateway-admin.azure-test.json`, or with `--topology private`
 `config/gateway.azure-private.yaml` from `config/gateway-admin.azure-private.json`. The header of the output names the
-admin file it was rendered from (scripts/admin/new-gateway-config.mjs:187, scripts/admin/new-gateway-config.mjs:270).
+admin file it was rendered from (scripts/admin/new-gateway-config.mjs:238, scripts/admin/new-gateway-config.mjs:301).
 The private topology reads the admin file's `deployment` block: the developer networks for `access_control.allow_cidrs`,
 the per-address sign-in limits, `store.max_connections`, the Claude Desktop opt-in on each policy, and `telemetry`, which adds
 the one metrics-only destination on the OpenTelemetry Collector sidecar and sets each policy's
 `OTEL_METRICS_INCLUDE_SESSION_ID` and `OTEL_METRICS_INCLUDE_ACCOUNT_UUID` to `false` (ADR-0007)
-(scripts/admin/new-gateway-config.mjs:238-264).
+(scripts/admin/new-gateway-config.mjs:274-332).
 
 | Option | Meaning |
 |---|---|
@@ -178,7 +178,7 @@ the admin file is a plain redeploy. Continues past one row's own failure so it d
 
 A `budgets` row is `{"scope": {...}, "amountUsd": <number or null>, "period": "daily"|"weekly"|"monthly"}`; `scope` is
 `{"type": "organization"}`, `{"type": "rbac_group", "rbac_group_id": "<a role in roles>"}` or `{"type": "user",
-"user_id": "<the developer's OIDC sub>"}` (scripts/admin/new-gateway-config.mjs:95-125).
+"user_id": "<the developer's OIDC sub>"}` (scripts/admin/new-gateway-config.mjs:97-127).
 
 ### move-to-managed-database.mjs
 
@@ -322,7 +322,6 @@ allowed range can use the console.
 | `-ImageTag` | The image tag to build; default today's date as `yyyy-MM-dd` |
 | `-AllowedCidr` | The only address range the console's ingress admits; default `10.40.0.0/16`, the VNet of the network-restricted deployment. `203.0.113.0/26` in these articles is a documentation range that admits nobody |
 | `-Topology` | `private` (default) or `test`; the console renders the configuration it saves for this topology (ADR-0010) |
-| `-GrantUserWrite` | Also grants `User.ReadWrite.All`, so the Chargeback page can set a user's department and cost center |
 | `-EnableSignIn` | Turns on Container Apps authentication with a `<app registration>-admin-ui-signin` registration that carries the `AdminUi.Admin` role; saving the configuration, creating roles and tagging users need it |
 | `-SignInAdmins` | User principal names to assign `AdminUi.Admin`, as several values or one comma-separated value; required with `-EnableSignIn`, and checked before any Azure call |
 | `-Plan` | Prints each step without building, deploying or granting anything |

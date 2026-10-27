@@ -21,6 +21,7 @@
     "gatewayJwtSecret": { "type": "securestring", "defaultValue": "" },
     "postgresPassword": { "type": "securestring", "defaultValue": "" },
     "gatewayAdminWriteKey": { "type": "securestring", "defaultValue": "", "metadata": { "description": "The key a configuration with deployment.adminApi reads as GATEWAY_ADMIN_WRITE_KEY (ADR-0008); admin-ui and bootstrap-budgets.mjs read the same secret." } },
+    "gatewayAdminPacerKey": { "type": "securestring", "defaultValue": "", "metadata": { "description": "The spend pacer's admin key, which a configuration with spendPacing reads as GATEWAY_ADMIN_PACER_KEY (ADR-0014); job-spend-pacer reads it from this secret." } },
     "databaseLocation": { "type": "string", "defaultValue": "[parameters('location')]", "metadata": { "description": "Region of the managed database (U-105: B1ms can be refused in the app's region). deploy.mjs keeps the region a server was created in." } },
     "database": { "type": "string", "defaultValue": "sidecar", "allowedValues": ["sidecar", "managed"], "metadata": { "description": "ADR-0012: sidecar runs PostgreSQL in the app on EmptyDir, emptied by each new revision; managed uses a Flexible Server with 35-day point-in-time restore. deploy.mjs reads it from the rendered store." } }
   },
@@ -210,7 +211,8 @@
             { "name": "jwt-secret", "value": "[parameters('gatewayJwtSecret')]" },
             { "name": "pg-password", "value": "[parameters('postgresPassword')]" },
             { "name": "gateway-config", "value": "[parameters('gatewayConfigYaml')]" },
-            { "name": "admin-write-key", "value": "[parameters('gatewayAdminWriteKey')]" }
+            { "name": "admin-write-key", "value": "[parameters('gatewayAdminWriteKey')]" },
+            { "name": "admin-pacer-key", "value": "[parameters('gatewayAdminPacerKey')]" }
           ]
         },
         "template": {
@@ -233,7 +235,8 @@
                 { "name": "GATEWAY_PG_HOST", "value": "[if(equals(parameters('database'), 'managed'), format('{0}.postgres.database.azure.com', variables('pgServerName')), '127.0.0.1')]" },
                 { "name": "FOUNDRY_RESOURCE", "value": "[parameters('foundryAccountName')]" },
                 { "name": "TESTER_CIDR", "value": "[parameters('testerCidr')]" },
-                { "name": "GATEWAY_ADMIN_WRITE_KEY", "secretRef": "admin-write-key" }
+                { "name": "GATEWAY_ADMIN_WRITE_KEY", "secretRef": "admin-write-key" },
+                { "name": "GATEWAY_ADMIN_PACER_KEY", "secretRef": "admin-pacer-key" }
               ],
               "probes": [
                 { "type": "Startup", "httpGet": { "path": "/healthz", "port": 8080 }, "initialDelaySeconds": 5, "periodSeconds": 10, "timeoutSeconds": 3, "failureThreshold": 10 },

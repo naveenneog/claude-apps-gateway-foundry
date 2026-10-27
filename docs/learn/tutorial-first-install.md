@@ -45,11 +45,11 @@ The install needs three Microsoft roles. One person can hold all of them, or sev
 
 | Need | Why | Source |
 |---|---|---|
-| **Owner** on the Azure subscription | The install creates resources and gives the gateway's identity a role on the Foundry account | infra/azure-test/gateway-test.json:106-142 |
+| **Owner** on the Azure subscription | The install creates resources and gives the gateway's identity a role on the Foundry account | infra/azure-test/gateway-test.json:107-143 |
 | An Entra account that may register applications, such as **Application Administrator** | The gateway signs developers in through its own app registration | https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app |
 | **Privileged Role Administrator** or **Global Administrator**, for one step | The admin console reads users and roles through Microsoft Graph application permissions, which only these roles grant. When the installing account lacks the role, the install stops at its last stage and a person who holds it runs the commands of one step ([Run the install](#run-the-install)); in this project's installs the role was activated through Privileged Identity Management for the grant (docs/UNKNOWNS.md, U-75) | https://learn.microsoft.com/en-us/powershell/entra-powershell/grant-api-permissions-managed-identity |
 | A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:217) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
-| A Microsoft Foundry account with Claude models deployed, in the same subscription and Entra tenant as the install, that accepts traffic from public networks, and whose endpoint subdomain is its name, as Foundry creates it | The gateway calls Claude through it with its managed identity, and names it by the account name (config/gateway.azure-test.yaml:36); the identity gets a role on that account (infra/azure-test/gateway-test.json:106-142) | https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude |
+| A Microsoft Foundry account with Claude models deployed, in the same subscription and Entra tenant as the install, that accepts traffic from public networks, and whose endpoint subdomain is its name, as Foundry creates it | The gateway calls Claude through it with its managed identity, and names it by the account name (config/gateway.azure-test.yaml:36); the identity gets a role on that account (infra/azure-test/gateway-test.json:107-143) | https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude |
 | One public address block, `/24` or narrower, that every developer machine and the administrator's machine connect to the internet from, such as the company's internet exit | The gateway and the console accept connections from that one block only; a machine outside it gets HTTP 403 (infra/azure-test/lib/plan.mjs:43-54) | https://learn.microsoft.com/en-us/azure/container-apps/ip-restrictions |
 | For Intune onboarding: the Intune **Application Manager** role, and Windows devices joined or registered to Entra ID and enrolled in Intune | Intune installs the developer apps | https://learn.microsoft.com/en-us/intune/intune-service/fundamentals/role-based-access-control |
 
@@ -222,7 +222,7 @@ Deploy it with: node infra/azure-test/deploy.mjs --tester-cidr <range> --step ap
 The second line is for running stages one at a time; the installer in the next steps runs that stage itself.
 
 A mistake is reported by field, for example `models[1].deployment: ...`, and nothing is written
-(scripts/admin/new-gateway-config.mjs:30-84).
+(scripts/admin/new-gateway-config.mjs:31-85).
 
 ## Preview the install
 
@@ -282,14 +282,14 @@ When a stage stops, the installer names it and the section of
 |---|---|---|
 | `admin-ui` stops with `Authorization_RequestDenied` | The account lacks Privileged Role Administrator for the Microsoft Graph grant (docs/UNKNOWNS.md, U-75) | 1. A Privileged Role Administrator, with the role active (in Privileged Identity Management when the tenant uses it), opens Azure Cloud Shell in **PowerShell** and runs [the Cloud Shell commands of the admin-ui stage](how-to-install-stage-by-stage.md#admin-ui), which give the console's identity its four permissions. When Cloud Shell is not available to that person, the same commands run in PowerShell 7 on any machine with the Azure CLI after `az login --allow-no-subscriptions`. 2. The installing account runs the install command again without `-TesterCidr` and with `-Steps admin-ui`: it reports `already granted` for the four, makes the console an owner of the gateway's app registration, which the **Roles** page needs, and deploys the console again (`admin-ui/infra/Deploy-AdminUi.ps1`, lines 240-265). When the **Developers** page still reports a missing permission, `az containerapp revision restart -n ca-admin-ui -g $rg --revision <revision>`, with the name from `az containerapp revision list -n ca-admin-ui -g $rg -o table`, starts it with a new Microsoft Graph token (admin-ui/server/managed-identity.mjs:12-16) |
 | `app` stops with `SkuNotAvailable` | The region does not offer the database size to this subscription; in this project every East US 2 attempt on 2026-10-25 was refused, so `-DatabaseLocation centralus` on the first install avoids it (docs/UNKNOWNS.md, U-105) | The same install command with `-DatabaseLocation` set to another region and `-Steps app,budgets,admin-ui`; the console has not saved yet at this point |
-| `the gateway is ready, but this machine gets 403 for ...` | This machine's public address left `$cidr` (docs/UNKNOWNS.md, U-33) | With the company block, this machine connects from inside it (on the company network or VPN), then the install command without `-TesterCidr` and with `-Steps app,budgets,admin-ui`. With this machine only, `$ip` and `$cidr` set again, then the same install command with `-Steps app,budgets,admin-ui`. The stop came before `budgets` and `admin-ui` ran, so the command runs them too. The message also names a `deploy.mjs` command; the install command does the same with the Foundry values (infra/azure-test/deploy.mjs:320-331) |
+| `the gateway is ready, but this machine gets 403 for ...` | This machine's public address left `$cidr` (docs/UNKNOWNS.md, U-33) | With the company block, this machine connects from inside it (on the company network or VPN), then the install command without `-TesterCidr` and with `-Steps app,budgets,admin-ui`. With this machine only, `$ip` and `$cidr` set again, then the same install command with `-Steps app,budgets,admin-ui`. The stop came before `budgets` and `admin-ui` ran, so the command runs them too. The message also names a `deploy.mjs` command; the install command does the same with the Foundry values (infra/azure-test/deploy.mjs:322-333) |
 | `app` stops when it adds the client secret, with a Microsoft Graph error about the credential's lifetime | The tenant's app management policy allows client secrets shorter than 30 days (docs/UNKNOWNS.md, U-1) | The same install command with `-ClientSecretDays` at or under the tenant's limit, and renewals at that interval |
 | `the signed-in user has no mail address; pass --email-domain` | The installing account has no e-mail address in Entra ID, as in many trial tenants (infra/azure-test/deploy.mjs:157) | When developers have e-mail addresses, the same install command with `-EmailDomain` set to their domain, for example `-EmailDomain contoso.com`. When they do not either, as in many trial tenants, also `"emailClaim": "preferred_username"` under `deployment` in the admin file, so the gateway reads the sign-in name (docs/UNKNOWNS.md, U-81), with `-EmailDomain` set to the sign-in names' domain, for example `contoso.onmicrosoft.com` |
 
 Every stage can run again: a stage that already ran finds its resources and changes only what differs
 (docs/adr/0009-a-staged-installer-over-the-existing-deploy-scripts.md:1). After the admin console has saved the
 gateway's configuration, the `app` stage keeps the console's configuration and prints `the admin console saved this
-gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:341-343); models,
+gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:343-345); models,
 roles and policies are then changed in the console. A later run names its stages with `-Steps`, such as `-Steps app` or
 `-Steps admin-ui`, and leaves out `-TesterCidr` unless the range changes: the `budgets` stage sets the spend caps from
 the admin file again, replacing caps changed in the console
@@ -636,7 +636,7 @@ stops at the grant after the console's range is set, as in the install; the rang
 The values come from [Run the installer again later](#run-the-installer-again-later).
 
 The gateway signs developers in with a client secret of its app registration, which ends `-ClientSecretDays` days after
-it is created, 7 when the option is absent (infra/azure-test/lib/plan.mjs:92-93; infra/azure-test/deploy.mjs:276). Running the `app` stage again keeps a
+it is created, 7 when the option is absent (infra/azure-test/lib/plan.mjs:92-93; infra/azure-test/deploy.mjs:278). Running the `app` stage again keeps a
 secret with more than a day left (infra/azure-test/lib/plan.mjs:256-265); `-RotateClientSecret` creates a new one
 whatever the end date. Existing sessions stay valid, because the session key is reused
 (docs/adr/0003-azure-test-deployment-with-restricted-ingress.md:89-91). With 30-day secrets, this command every three

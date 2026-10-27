@@ -58,7 +58,7 @@ node scripts/admin/set-developer.mjs --upn dev@contoso.com --role Gateway.Standa
 ## Add a new role
 
 Entra app roles are more than a label: the gateway's `oidc.allowed_groups` admits sign-in only from a role already
-in the admin file (scripts/admin/new-gateway-config.mjs:211-213), and a new role needs a matching
+in the admin file (scripts/admin/new-gateway-config.mjs:213-215), and a new role needs a matching
 [policy](how-to-admin-configure.md#change-models-and-per-role-model-access) before anyone holding it can use a
 model. After the admin console has saved the gateway's configuration, the console's **Access & models** page adds the
 role to the configuration, because a later `app` stage keeps the console's configuration rather than the admin file

@@ -82,6 +82,19 @@
       return next;
     },
 
+    // ADR-0014: the soft limit, spendPacing.softLimitPercent in the admin file; null is off, with the key removed.
+    softLimitOf(admin) { return Number.isInteger(admin?.spendPacing?.softLimitPercent) ? admin.spendPacing.softLimitPercent : null; },
+    setSoftLimit(admin, percent) {
+      const next = clone(admin);
+      if (percent === null) delete next.spendPacing;
+      else next.spendPacing = { softLimitPercent: percent };
+      return next;
+    },
+    softLimitError(admin, percent) {
+      if (admin?.deployment?.adminApi !== true) return 'The soft limit needs the gateway’s admin API, which this admin file does not turn on.';
+      return Number.isInteger(percent) && percent >= 1 && percent <= 99 ? null : 'Enter a whole number from 1 to 99.';
+    },
+
     // Admitting needs a policy (adminErrors: every admitted role has one), so one is created with no models yet; a
     // role admitted before comes back with its original policy and position.
     admitRole(admin, role, original) {

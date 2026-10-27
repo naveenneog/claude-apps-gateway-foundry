@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { desktopBlock, desktopErrors, desktopOfFor } from './desktop-settings.mjs';
+import { adminApiBlock, spendPacingErrors } from './spend-pacing.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/;
@@ -33,7 +34,7 @@ export function adminErrors(admin, knownRoles, topology = 'private') {
   const errors = [];
   // A misspelt "policies" would otherwise drop every policy without a word.
   for (const key of Object.keys(admin)) {
-    if (!['$comment', 'roles', 'models', 'policies', 'deployment', 'budgets'].includes(key)) errors.push(`${key}: unknown key; the keys are roles, models, policies, deployment, budgets and $comment`);
+    if (!['$comment', 'roles', 'models', 'policies', 'deployment', 'budgets', 'spendPacing'].includes(key)) errors.push(`${key}: unknown key; the keys are roles, models, policies, deployment, budgets, spendPacing and $comment`);
   }
   const list = (value, field) => {
     if (Array.isArray(value)) return value;
@@ -82,6 +83,7 @@ export function adminErrors(admin, knownRoles, topology = 'private') {
   }
   if (admin.deployment !== undefined) errors.push(...deploymentErrors(admin.deployment, admin.policies, topology));
   if (admin.budgets !== undefined) errors.push(...budgetErrors(admin.budgets, roles));
+  if (admin.spendPacing !== undefined) errors.push(...spendPacingErrors(admin.spendPacing, admin.deployment));
   return errors;
 }
 
@@ -261,29 +263,9 @@ export function renderGatewayConfig(admin, { adminFile = 'config/gateway-admin.a
     // environment (measured 100.100.0.190, 2026-10-17): the environment's own internal routing, not the tester's
     // address, so it is additional to, not instead of, the tester CIDR.
     `  allow_cidrs: [${['"${TESTER_CIDR}"', ...(admin.deployment?.adminApi === true ? ['100.100.0.0/17'] : [])].join(', ')}]`,
-    ...adminApiBlock(admin.deployment?.adminApi === true),
+    ...adminApiBlock(admin.deployment?.adminApi === true, admin.spendPacing),
     '',
   ].join('\n');
-}
-
-// ADR-0008: the gateway's own spend-limits admin API (https://code.claude.com/docs/en/claude-apps-gateway-spend-limits),
-// which the admin-ui BFF calls server-to-server with GATEWAY_ADMIN_WRITE_KEY. Retention matches the gateway's own
-// defaults, stated explicitly rather than left implicit. write_keys/read_keys entries are {id, key} objects, not
-// bare strings (confirmed live 2026-10-16 against the gateway's own schema and Anthropic's example config). Shared
-// by both topologies: the admin API is as usable on the test deployment as on the private one.
-function adminApiBlock(enabled) {
-  if (!enabled) return [];
-  return [
-    '',
-    '# The gateway\'s own spend-limits admin API, called by the admin-ui backend (ADR-0008). Not a human sign-in path:',
-    '# GATEWAY_ADMIN_WRITE_KEY is a server-held secret, never a developer credential.',
-    'admin:',
-    '  write_keys:',
-    '    - id: admin-ui',
-    '      key: "${GATEWAY_ADMIN_WRITE_KEY}"',
-    '  spend_retention_months: 13',
-    '  audit_retention_days: 365',
-  ];
 }
 
 // The network-restricted deployment (ADR-0005): X-Forwarded-For trusted only from the environment's infrastructure
@@ -313,7 +295,7 @@ function renderPrivate(admin, adminFile, oidc, upstreamAndModels) {
     '      traces: false',
   ] : [];
   // ADR-0008: the gateway's own spend-limits admin API; see adminApiBlock's own comment.
-  const adminApi = adminApiBlock(d.adminApi === true);
+  const adminApi = adminApiBlock(d.adminApi === true, admin.spendPacing);
   return [
     '# Claude apps gateway: network-restricted deployment on Azure Container Apps (ADR-0005).',
     `# Generated from ${adminFile} by the admin script new-gateway-config.mjs --topology private (ADR-0004).`,

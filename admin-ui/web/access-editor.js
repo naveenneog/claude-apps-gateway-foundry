@@ -195,5 +195,45 @@ const accessEditor = (() => {
     });
   }
 
-  return { matrix, admission, models };
+  // ADR-0014: the soft limit. On, the spend pacer job turns the rest of a person's monthly cap into a daily cap once
+  // they pass this share of it. Off removes spendPacing from the draft.
+  function softLimit(s, act) {
+    const current = cv().softLimitOf(s.draft);
+    const blocked = cv().softLimitError(s.draft, 80)?.includes('admin API') ? cv().softLimitError(s.draft, 80) : null;
+    const reasonId = blocked ? ui.uid('soft') : null;
+    const changed = cv().softLimitOf(s.original) !== current;
+    const percent = el('input', {
+      type: 'number', min: '1', max: '99', step: '1', inputmode: 'numeric', class: 'num-input', value: String(current ?? 80),
+      disabled: Boolean(s.readOnly) || current === null, 'aria-label': 'Soft limit, percent of the monthly cap', 'data-key': 'soft-limit-percent',
+      onchange: (e) => {
+        const value = Number(e.currentTarget.value);
+        const problem = cv().softLimitError(s.draft, value);
+        ui.setFieldError(e.currentTarget, problem ?? '');
+        if (!problem) act.setSoftLimit(value);
+      },
+    });
+    return ui.card({
+      title: 'Soft limit',
+      description: 'Past this share of a person’s monthly spend cap, the rest of the cap is spread over the days left in the month: every five minutes the spend pacer sets that person a daily cap. Claude Code warns them at 75% and 95% of it, and the gateway’s refusal explains the daily limit.',
+      content: el('div', { class: 'card-body stack' }, [
+        el('div', { class: 'admit-row' }, [
+          el('label', { class: 'switch' }, [
+            el('input', {
+              type: 'checkbox', role: 'switch', checked: current !== null, disabled: Boolean(s.readOnly) || Boolean(blocked),
+              'aria-label': 'Soft limit', 'aria-describedby': reasonId, 'data-key': 'soft-limit',
+              onchange: (e) => act.setSoftLimit(e.currentTarget.checked ? 80 : null),
+            }),
+            el('span', { class: 'switch-track', 'aria-hidden': 'true' }),
+          ]),
+          el('div', { class: 'admit-main' }, [
+            el('div', { class: 'admit-title' }, [el('strong', { text: current === null ? 'Off' : `${current}% of the monthly cap` }), changed ? ui.pill('Changed', 'accent') : null]),
+            ui.field({ label: 'Percent of the monthly cap', control: percent }),
+            blocked && el('p', { class: 'reason', id: reasonId, text: blocked }),
+          ]),
+        ]),
+      ]),
+    });
+  }
+
+  return { matrix, admission, models, softLimit };
 })();

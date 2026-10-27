@@ -124,7 +124,7 @@ test('T-83 an error with no .status becomes a 502, not a 200 or an uncaught thro
 // it is trusted only when ADMIN_UI_SIGN_IN=required, because the platform strips it from external requests only then (U-87).
 const principal = (roles, name = 'admin@contoso.example') => Buffer.from(JSON.stringify({
   auth_typ: 'aad', name_typ: 'preferred_username', role_typ: 'roles',
-  claims: [{ typ: 'preferred_username', val: name }, { typ: 'name', val: 'Admin One' }, ...roles.map((val) => ({ typ: 'roles', val }))],
+  claims: [{ typ: 'preferred_username', val: name }, { typ: 'name', val: 'Admin One' }, { typ: 'http://schemas.microsoft.com/identity/claims/objectidentifier', val: '9a9a9a9a-0000-4000-8000-000000000001' }, ...roles.map((val) => ({ typ: 'roles', val }))],
 })).toString('base64');
 const withHeaders = (r, headers) => ({ ...r, headers });
 
@@ -142,7 +142,11 @@ function writeDeps(signIn) {
     list: async () => [{ value: 'Gateway.Standard' }],
     create: async (body) => { calls.push(['createRole', body]); return { value: body.value }; },
   };
-  deps.users = { tag: async (upn, body) => { calls.push(['tag', upn, body]); return { user: { upn } }; }, canWrite: async () => true };
+  deps.tags = {
+    status: async () => ({ available: true }),
+    set: async (id, changes, by) => { calls.push(['tag', id, changes, by]); return { objectId: id, ...changes }; },
+    importCsv: async (csv, opts) => { calls.push(['import', csv, opts.by, typeof opts.resolve]); return { updated: [], skipped: [] }; },
+  };
   deps.chargeback = { build: async (q) => { calls.push(['chargeback', q]); return { period: q.period, groupBy: q.groupBy, rows: [], groups: [], totalCents: 0, notes: [] }; }, csv: () => 'period\r\n' };
   return { deps, calls };
 }
@@ -150,7 +154,8 @@ function writeDeps(signIn) {
 const WRITES = [
   ['PUT', '/api/gateway-config', { admin: { roles: [] }, baseVersion: 'v1' }],
   ['POST', '/api/roles', { value: 'Gateway.Trial', displayName: 'T', description: 'T' }],
-  ['PATCH', '/api/users/ana%40contoso.example', { department: 'X' }],
+  ['PUT', '/api/user-tags/3f2b1c4d-0000-4000-8000-00000000abcd', { department: 'X' }],
+  ['POST', '/api/user-tags/import', { csv: 'user,department\nana@contoso.example,X\n' }],
 ];
 
 test('T-103 with sign-in off, every write route answers 403 even with a forged admin principal header', async () => {
@@ -190,7 +195,7 @@ test('T-103 GET /api/me reports the sign-in mode and the signed-in admin only wh
   const off = await handleApi(withHeaders(req('GET', '/api/me'), { 'x-ms-client-principal': principal(['AdminUi.Admin']) }), writeDeps('off').deps);
   assert.deepEqual(off.body, { signIn: 'off', user: null, roles: [], isAdmin: false });
   const on = await handleApi(withHeaders(req('GET', '/api/me'), { 'x-ms-client-principal': principal(['AdminUi.Admin']) }), writeDeps('required').deps);
-  assert.deepEqual(on.body, { signIn: 'required', user: { name: 'Admin One', upn: 'admin@contoso.example' }, roles: ['AdminUi.Admin'], isAdmin: true });
+  assert.deepEqual(on.body, { signIn: 'required', user: { name: 'Admin One', upn: 'admin@contoso.example', id: '9a9a9a9a-0000-4000-8000-000000000001' }, roles: ['AdminUi.Admin'], isAdmin: true });
 });
 
 test('T-103 the new routes pass their inputs through: rollout previous revision, PUT acknowledgement, chargeback query and CSV', async () => {
@@ -198,28 +203,16 @@ test('T-103 the new routes pass their inputs through: rollout previous revision,
   const { deps, calls } = writeDeps('required');
   await handleApi(withHeaders(req('GET', '/api/gateway-config/rollout?previous=r1'), { 'x-ms-client-principal': admin }), deps);
   await handleApi(withHeaders(req('PUT', '/api/gateway-config', { admin: { roles: [] }, baseVersion: 'v1', acknowledgeDataLoss: true }), { 'x-ms-client-principal': admin }), deps);
-  await handleApi(withHeaders(req('PATCH', '/api/users/ana%40contoso.example', { department: 'X' }), { 'x-ms-client-principal': admin }), deps);
+  await handleApi(withHeaders(req('PUT', '/api/user-tags/3f2b1c4d-0000-4000-8000-00000000abcd', { department: 'X', jobTitle: 'dropped' }), { 'x-ms-client-principal': admin }), deps);
   const csv = await handleApi(withHeaders(req('GET', '/api/chargeback?period=weekly&groupBy=costCenter&format=csv'), { 'x-ms-client-principal': admin }), deps);
   assert.deepEqual(calls[0], ['rollout', 'r1']);
   assert.deepEqual(calls[1], ['write', { admin: { roles: [] }, baseVersion: 'v1', acknowledgeDataLoss: true }]);
-  assert.deepEqual(calls[2], ['tag', 'ana@contoso.example', { department: 'X' }]);
+  assert.deepEqual(calls[2], ['tag', '3f2b1c4d-0000-4000-8000-00000000abcd', { department: 'X', jobTitle: 'dropped' }, '9a9a9a9a-0000-4000-8000-000000000001']);
   assert.deepEqual(calls[3], ['chargeback', { period: 'weekly', groupBy: 'costCenter' }]);
   assert.equal(csv.status, 200);
   assert.equal(csv.raw, 'period\r\n');
   assert.match(csv.headers['Content-Type'], /^text\/csv/);
   assert.match(csv.headers['Content-Disposition'], /attachment; filename="chargeback-weekly-costCenter-\d{4}-\d{2}-\d{2}\.csv"/);
-});
-
-test('T-101 PATCH /api/users/:upn refuses tagging without User.ReadWrite.All before calling Graph', async () => {
-  const { deps, calls } = writeDeps('required');
-  deps.users.canWrite = async () => false;
-  const res = await handleApi(withHeaders(
-    req('PATCH', '/api/users/ana%40contoso.example', { department: 'Engineering' }),
-    { 'x-ms-client-principal': principal(['AdminUi.Admin']) },
-  ), deps);
-  assert.equal(res.status, 403);
-  assert.match(res.body.error, /User\.ReadWrite\.All/);
-  assert.equal(calls.some(([name]) => name === 'tag'), false);
 });
 
 test('T-103 a store error with details reaches the browser with its status and details', async () => {
@@ -247,23 +240,42 @@ test('T-103 with sign-in required, granting or removing a developer role needs A
   assert.equal((await handleApi(withHeaders(req('GET', '/api/developers'), { 'x-ms-client-principal': principal(['AdminUi.Admin']) }), deps)).status, 200);
 });
 
-test('T-107 GET /api/business-units returns the units with canTag, which needs both sign-in and User.ReadWrite.All', async () => {
+test('T-107 T-144 GET /api/business-units returns the units with canTag, which needs admin sign-in and the tag store', async () => {
   const data = { users: [{ id: 'u1', upn: 'ana@contoso.example', department: 'Engineering' }], units: [{ name: 'Engineering', users: 1 }], unassigned: 0, skipped: [] };
   const admin = { 'x-ms-client-principal': principal(['AdminUi.Admin']) };
   const on = writeDeps('required').deps;
   on.businessUnits = { list: async () => data };
   const ok = await handleApi(withHeaders(req('GET', '/api/business-units'), admin), on);
   assert.equal(ok.status, 200);
-  assert.deepEqual(ok.body, { ...data, canTag: true });
+  assert.deepEqual(ok.body, { ...data, canTag: true, tagsReason: null });
   const offDeps = writeDeps('off').deps;
   offDeps.businessUnits = { list: async () => data };
   assert.equal((await handleApi(withHeaders(req('GET', '/api/business-units'), admin), offDeps)).body.canTag, false, 'sign-in off: no tagging');
-  on.users.canWrite = async () => false;
-  assert.equal((await handleApi(withHeaders(req('GET', '/api/business-units'), admin), on)).body.canTag, false);
+  on.tags.status = async () => ({ available: false, reason: 'needs the managed database' });
+  const sidecar = (await handleApi(withHeaders(req('GET', '/api/business-units'), admin), on)).body;
+  assert.deepEqual([sidecar.canTag, sidecar.tagsReason], [false, 'needs the managed database']);
   const none = writeDeps('required').deps;
   assert.equal((await handleApi(withHeaders(req('GET', '/api/business-units'), admin), none)).status, 503);
 });
 
+test('T-144 PUT /api/user-tags and POST /api/user-tags/import store with the administrator as updated_by; the old Entra route is gone', async () => {
+  const admin = { 'x-ms-client-principal': principal(['AdminUi.Admin']) };
+  const { deps, calls } = writeDeps('required');
+  const imp = await handleApi(withHeaders(req('POST', '/api/user-tags/import', { csv: 'user,department\nana@contoso.example,X\n' }), admin), deps);
+  assert.equal(imp.status, 200);
+  assert.deepEqual(calls.at(-1), ['import', 'user,department\nana@contoso.example,X\n', '9a9a9a9a-0000-4000-8000-000000000001', 'function']);
+  assert.equal((await handleApi(withHeaders(req('POST', '/api/user-tags/import', { file: 'x' }), admin), deps)).status, 400, 'body must carry csv');
+  assert.equal((await handleApi(withHeaders(req('PUT', '/api/user-tags/a%2Fb', { department: 'X' }), admin), deps)).status, 400);
+  assert.equal((await handleApi(withHeaders(req('PATCH', '/api/users/ana%40contoso.example', { department: 'X' }), admin), deps)).status, 404, 'no route writes Entra users');
+  const before = calls.length;
+  for (const [method, p, body] of [['PUT', '/api/user-tags/3f2b1c4d-0000-4000-8000-00000000abcd', { department: 'X' }], ['POST', '/api/user-tags/import', { csv: 'user\n' }]]) {
+    assert.equal((await handleApi(withHeaders(req(method, p, body), { 'x-ms-client-principal': principal(['Gateway.Standard']) }), deps)).status, 403, `${method} ${p} without AdminUi.Admin`);
+  }
+  assert.equal(calls.length, before, 'a refused write never reaches the store');
+  deps.tags.set = async () => { throw Object.assign(new Error('needs the managed database'), { status: 503 }); };
+  const down = await handleApi(withHeaders(req('PUT', '/api/user-tags/3f2b1c4d-0000-4000-8000-00000000abcd', { department: 'X' }), admin), deps);
+  assert.deepEqual([down.status, down.body.error], [503, 'needs the managed database']);
+});
 // T-108 (ADR-0011): with sign-in required, every API route except /api/health and /api/me needs AdminUi.Admin,
 // checked once in handleApi before any route runs, so the backend behind a refused route is never called.
 const READS_AND_WRITES = [
@@ -320,7 +332,7 @@ test('T-108 with sign-in required, AdminUi.Admin reaches every route; /api/healt
   assert.equal((await handleApi(withHeaders(req('GET', '/api/health'), {}), deps)).status, 200);
   const me = await handleApi(withHeaders(req('GET', '/api/me'), { 'x-ms-client-principal': principal(['Gateway.Standard'], 'bob@contoso.example') }), deps);
   assert.equal(me.status, 200);
-  assert.deepEqual(me.body, { signIn: 'required', user: { name: 'Admin One', upn: 'bob@contoso.example' }, roles: ['Gateway.Standard'], isAdmin: false });
+  assert.deepEqual(me.body, { signIn: 'required', user: { name: 'Admin One', upn: 'bob@contoso.example', id: '9a9a9a9a-0000-4000-8000-000000000001' }, roles: ['Gateway.Standard'], isAdmin: false });
 });
 
 test('T-108 with sign-in off, reads and ADR-0008 writes keep working behind the IP allowlist (unchanged)', async () => {

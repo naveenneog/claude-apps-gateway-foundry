@@ -21,7 +21,8 @@ export function principalFrom(headers = {}, signIn = 'off') {
   const claim = (...types) => p.claims.find((c) => types.includes(c?.typ))?.val ?? null;
   const roles = p.claims.filter((c) => roleTypes.includes(c?.typ) && typeof c.val === 'string').map((c) => c.val);
   const upn = claim('preferred_username', 'upn', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn', p.name_typ) ?? null;
-  return { signIn: mode, user: { name: claim('name') ?? upn, upn }, roles, isAdmin: roles.includes(ADMIN_ROLE) };
+  const id = claim('http://schemas.microsoft.com/identity/claims/objectidentifier', 'oid') ?? null;
+  return { signIn: mode, user: { name: claim('name') ?? upn, upn, id }, roles, isAdmin: roles.includes(ADMIN_ROLE) };
 }
 
 /**

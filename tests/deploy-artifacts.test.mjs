@@ -1,6 +1,8 @@
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cidrContains, configVariables, unsetConfigVariables, GATEWAY_COMMAND } from '../infra/azure-test/lib/plan.mjs';
@@ -192,8 +194,8 @@ test('template: one replica, one revision, sidecar data on replica storage, conf
 
 test('template: secrets come only from secure parameters; the registry and Foundry use the one identity', () => {
   const secrets = Object.fromEntries(app.properties.configuration.secrets.map((s) => [s.name, s.value]));
-  assert.deepEqual(Object.keys(secrets).sort(), ['admin-write-key', 'gateway-config', 'jwt-secret', 'oidc-client-secret', 'pg-password']);
-  for (const name of ['admin-write-key', 'jwt-secret', 'oidc-client-secret', 'pg-password']) {
+  assert.deepEqual(Object.keys(secrets).sort(), ['admin-pacer-key', 'admin-write-key', 'gateway-config', 'jwt-secret', 'oidc-client-secret', 'pg-password']);
+  for (const name of ['admin-pacer-key', 'admin-write-key', 'jwt-secret', 'oidc-client-secret', 'pg-password']) {
     const p = /^\[parameters\('(\w+)'\)\]$/.exec(secrets[name])?.[1];
     assert.ok(p, `${name} is a parameter reference`);
     assert.equal(template.parameters[p].type.toLowerCase(), 'securestring', `${p} is a securestring`);
@@ -316,18 +318,40 @@ test('T-104 admin-ui main.bicep: Container Apps Contributor scoped to the gatewa
   assert.match(bicep, /@allowed\(\[ 'test', 'private' \]\)\s*\nparam gatewayTopology string/);
 });
 
-test('T-104 Deploy-AdminUi.ps1 names the new Graph permissions, grants User.ReadWrite.All only with -GrantUserWrite, and makes admin-ui an owner of the gateway app', () => {
+test('T-104 T-146 Deploy-AdminUi.ps1 grants four Graph permissions, never User.ReadWrite.All, and makes admin-ui an owner of the gateway app', () => {
   const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
   assert.match(deploy, /@\{ Value = 'Application\.ReadWrite\.OwnedBy'; Id = '18a4783c-866b-4cc7-a460-3d5e5662c884' \}/);
-  assert.match(deploy, /\[switch\]\$GrantUserWrite/);
-  assert.match(deploy, /if \(\$GrantUserWrite\) \{ \$NEEDED_GRAPH_ROLES \+= @\{ Value = 'User\.ReadWrite\.All'; Id = '741f803b-c850-494e-b5df-cde7c675a1ca' \} \}/);
-  assert.doesNotMatch(deploy.replace(/if \(\$GrantUserWrite\) \{[^\n]*\n/, ''), /741f803b-c850-494e-b5df-cde7c675a1ca/, 'User.ReadWrite.All appears only under -GrantUserWrite');
+  const needed = /\$NEEDED_GRAPH_ROLES = @\(([\s\S]*?)\n\)/.exec(deploy)?.[1] ?? '';
+  assert.deepEqual([...needed.matchAll(/Value = '([^']+)'/g)].map((m) => m[1]).sort(),
+    ['AppRoleAssignment.ReadWrite.All', 'Application.Read.All', 'Application.ReadWrite.OwnedBy', 'User.Read.All']);
+  assert.doesNotMatch(deploy, /GrantUserWrite/, 'the switch is gone (ADR-0015)');
+  assert.doesNotMatch(deploy, /NEEDED_GRAPH_ROLES \+=/, 'nothing adds a permission to the list');
   assert.match(deploy, /applications\/\$gatewayAppObjectId\/owners\/`?\$ref/);
   assert.match(deploy, /\[switch\]\$EnableSignIn/);
   assert.match(deploy, /gatewayAppName\s+= @\{ value = \$GatewayAppName \}/);
   assert.match(deploy, /enableSignIn\s+= @\{ value = \[bool\]\$EnableSignIn \}/);
 });
 
+test('T-146 Deploy-AdminUi.ps1 prints the command that removes a User.ReadWrite.All grant an earlier install left, and does not remove it itself', () => {
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  const step = /Step 'Grant Microsoft Graph application permissions[\s\S]*?\n\}\n/.exec(deploy.replace(/\r\n/g, '\n'))?.[0] ?? '';
+  assert.match(step, /\$LEGACY_USER_WRITE = '741f803b-c850-494e-b5df-cde7c675a1ca'/);
+  assert.match(step, /Write-Warning/);
+  assert.match(step, /az rest --method delete --url `"https:\/\/graph\.microsoft\.com\/v1\.0\/servicePrincipals\/\$identityPrincipalId\/appRoleAssignments\/\$\(\$legacy\.id\)`"/);
+  assert.doesNotMatch(step.replace(/Write-Warning[^\n]*\n/g, ''), /--method delete/, 'the delete is printed for an administrator, not run');
+  assert.match(step, /query 'value\[\]\.\{id:id,appRoleId:appRoleId,resourceId:resourceId\}'/);
+  // Code review, P-44: the warning must run, not only read right. Executed with stub values in PowerShell 7; an
+  // unescaped quote split it into two arguments and stopped the deploy under $ErrorActionPreference = 'Stop'.
+  const block = /\$LEGACY_USER_WRITE = [\s\S]*?\n    \}\n/.exec(step)?.[0];
+  assert.ok(block, 'the legacy-permission block');
+  const script = `$ErrorActionPreference = 'Stop'\n$identityPrincipalId = 'P1'\n$graphSpId = 'G1'\n` +
+    `$assignments = @([pscustomobject]@{ id = 'L1'; appRoleId = '741f803b-c850-494e-b5df-cde7c675a1ca'; resourceId = 'G1' })\n${block}`;
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'p44-')), 'legacy.ps1');
+  fs.writeFileSync(file, script);
+  const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', file], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `the warning block failed: ${r.stderr}`);
+  assert.match(`${r.stdout}${r.stderr}`, /az rest --method delete --url "?https:\/\/graph\.microsoft\.com\/v1\.0\/servicePrincipals\/P1\/appRoleAssignments\/L1"?/);
+});
 // T-108 (ADR-0011): an existing default-access assignment must not count as AdminUi.Admin, and a deployment without
 // sign-in says that the console is then limited by IP address only.
 test('T-108 Deploy-AdminUi.ps1 counts only an AdminUi.Admin assignment as "already admin", and warns when sign-in is off', () => {
@@ -371,4 +395,34 @@ test('T-114 template: the gateway gets GATEWAY_PG_HOST, 127.0.0.1 for the sideca
 test('T-114 the managed gateway command is the one the entrypoint execs, with the config the template mounts', () => {
   const exec = /^\s*exec (\/usr\/local\/bin\/claude) (gateway --config \S+)$/m.exec(entrypoint);
   assert.deepEqual(GATEWAY_COMMAND, { command: [exec[1]], args: exec[2].split(' ') });
+});
+
+// T-137 (ADR-0014): the pacer key exists wherever the admin API does, keeps its value on a later run, and the job that
+// uses it is admin-ui's own image and identity on a five-minute schedule, reading the key from the gateway app.
+test('T-137 template: GATEWAY_ADMIN_PACER_KEY is set from admin-pacer-key, and a paced rendering has every variable it reads', () => {
+  assert.equal(envOf(containers.gateway).GATEWAY_ADMIN_PACER_KEY?.secretRef, 'admin-pacer-key');
+  const paced = renderGatewayConfig({ roles: ['Gateway.Standard'], models: [{ id: 'claude-sonnet-5', deployment: 'claude-sonnet-5' }],
+    deployment: { adminApi: true }, spendPacing: { softLimitPercent: 80 } });
+  assert.ok(configVariables(paced).includes('GATEWAY_ADMIN_PACER_KEY'));
+  assert.deepEqual(unsetConfigVariables(paced, template), []);
+  const deploy = read('infra/azure-test/deploy.mjs');
+  assert.match(deploy, /registerSecret\(live\.secrets\['admin-pacer-key'\] \|\| newSecret\(32\)\)/, 'a later run keeps the live value');
+  assert.match(deploy, /gatewayAdminPacerKey: secrets\.pacer/);
+});
+
+test('T-137 admin-ui main.bicep: job-spend-pacer runs every five minutes from admin-ui\'s image and identity, with no key of its own', () => {
+  const bicep = read('admin-ui/infra/main.bicep').replace(/\r\n/g, '\n');
+  const job = bicep.split(/^(?=resource )/m).find((b) => /^resource \w+ 'Microsoft\.App\/jobs@/.test(b));
+  assert.ok(job, 'a Container Apps job');
+  assert.match(job, /name: 'job-spend-pacer'/);
+  assert.match(job, /triggerType: 'Schedule'/);
+  assert.match(job, /cronExpression: '\*\/5 \* \* \* \*'/);
+  assert.match(job, /environmentId: environment\.id/);
+  assert.match(job, /userAssignedIdentities: \{ '\$\{identity\.id\}': \{\} \}/);
+  assert.match(job, /image: '\$\{acrLoginServer\}\/\$\{imageTag\}'/);
+  assert.match(job, /command: \[ 'node', 'server\/pacer-job\.mjs' \]/);
+  for (const name of ['AZURE_CLIENT_ID', 'GATEWAY_URL', 'GATEWAY_RESOURCE_ID']) assert.match(job, new RegExp(`\\{ name: '${name}', value: `), name);
+  assert.match(job, /\{ name: 'GATEWAY_ADMIN_FILE_JSON', secretRef: 'gateway-admin-file-json' \}/);
+  assert.doesNotMatch(job, /gatewayAdminWriteKey|PACER_KEY|admin-pacer-key|write-key/i, 'the job reads the keys from the gateway app, so none is passed to it');
+  assert.match(job, /dependsOn: \[[^\]]*gatewayConfigWriter/, 'the role that lets it read the gateway app\'s secrets exists first');
 });

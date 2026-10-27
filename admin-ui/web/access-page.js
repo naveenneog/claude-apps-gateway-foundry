@@ -99,7 +99,7 @@ const accessPage = (() => {
       s.focusKey = null;
       const body = s.mode === 'review'
         ? [accessReview.reviewPanel({ preview: s.preview, config: s.config, blocked: blocked(), onBack: back, onApply: apply })]
-        : [accessEditor.matrix(s, act), accessEditor.models(s, act), accessEditor.admission(s, act), dirtyBar()];
+        : [accessEditor.matrix(s, act), accessEditor.models(s, act), accessEditor.admission(s, act), accessEditor.softLimit(s, act), dirtyBar()];
       view.replaceChildren(...[accessReview.flow(s.mode), ...banners(), s.mode === 'edit' ? facts() : null, ...body].filter(Boolean));
       if (focusKey) view.querySelector(`[data-key="${CSS.escape(focusKey)}"]`)?.focus();
     }
@@ -175,6 +175,7 @@ const accessPage = (() => {
     const act = {
       toggleModel: (role, id, on) => change(cv.toggleModel(s.draft, role, id, on, s.original)),
       setDesktop: (role, on) => change(cv.setDesktop(s.draft, role, on, s.original)),
+      setSoftLimit: (percent) => change(cv.setSoftLimit(s.draft, percent), percent === null ? 'soft-limit' : 'soft-limit-percent'),
       admit: (role) => {
         const next = cv.admitRole(s.draft, role, s.original);
         const first = next.models?.[0]?.id;

@@ -300,3 +300,37 @@ test('T-122 desktopSettings is refused unless it holds known switches as true or
   assert.deepEqual(adminErrors(off, ['Gateway.Standard', 'Gateway.Premium'], 'test'), []);
   assert.doesNotMatch(renderGatewayConfig(off, { topology: 'test' }), /desktop/);
 });
+
+// T-135 (ADR-0014): spendPacing turns on the soft limit. The job writes with its own key, so the admin block lists it,
+// and the 429 a paced person gets explains the daily cap.
+const pacing = (spendPacing, deployment = { adminApi: true }) => ({ ...twoRoles(), deployment, spendPacing });
+const ROLES2 = ['Gateway.Standard', 'Gateway.Premium'];
+
+test('T-135 spendPacing renders the spend-pacer write key and a blocked message in the shared admin block', () => {
+  const yaml = renderGatewayConfig(pacing({ softLimitPercent: 80 }));
+  assert.match(yaml, /\nadmin:\n {2}write_keys:\n {4}- id: admin-ui\n {6}key: "\$\{GATEWAY_ADMIN_WRITE_KEY\}"\n {4}- id: spend-pacer\n {6}key: "\$\{GATEWAY_ADMIN_PACER_KEY\}"\n/);
+  const message = /^ {2}blocked_message: "(.+)"$/m.exec(yaml)?.[1];
+  assert.ok(message, 'a blocked_message is rendered');
+  assert.match(message, /passed 80% of your monthly budget/);
+  assert.match(message, /00:00 UTC/);
+  const without = renderGatewayConfig({ ...twoRoles(), deployment: { adminApi: true } });
+  assert.doesNotMatch(without, /spend-pacer|blocked_message|GATEWAY_ADMIN_PACER_KEY/, 'without spendPacing the admin block is unchanged');
+  assert.deepEqual(adminErrors(pacing({ softLimitPercent: 80 }), ROLES2, 'test'), []);
+});
+
+test('T-135 negative: spendPacing is refused unless softLimitPercent is a whole number from 1 to 99 and the admin API is on', () => {
+  for (const [value, message] of [
+    [{ softLimitPercent: 0 }, /spendPacing\.softLimitPercent: must be a whole number from 1 to 99/],
+    [{ softLimitPercent: 100 }, /spendPacing\.softLimitPercent: must be a whole number from 1 to 99/],
+    [{ softLimitPercent: 80.5 }, /spendPacing\.softLimitPercent: must be a whole number from 1 to 99/],
+    [{ softLimitPercent: '80' }, /spendPacing\.softLimitPercent: must be a whole number from 1 to 99/],
+    [{}, /spendPacing\.softLimitPercent: must be a whole number from 1 to 99/],
+    [{ softLimitPercent: 80, window: 30 }, /spendPacing\.window: unknown key; the key is softLimitPercent/],
+    [[80], /spendPacing: must be an object/],
+  ]) {
+    assert.match(adminErrors(pacing(value), ROLES2, 'test').join('\n'), message, JSON.stringify(value));
+  }
+  assert.match(adminErrors(pacing({ softLimitPercent: 80 }, { adminApi: false }), ROLES2, 'test').join('\n'), /spendPacing: needs deployment\.adminApi true/);
+  assert.match(adminErrors({ ...twoRoles(), spendPacing: { softLimitPercent: 80 } }, ROLES2, 'test').join('\n'), /spendPacing: needs deployment\.adminApi true/);
+  assert.doesNotMatch(adminErrors({ ...twoRoles(), spendPacing: { softLimitPercent: 80 } }, ROLES2, 'test').join('\n'), /unknown key/, 'spendPacing is a known top-level key');
+});

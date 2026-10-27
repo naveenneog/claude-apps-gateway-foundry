@@ -545,7 +545,7 @@ The script creates the client secret in the app step, valid for `-ClientSecretDa
 `-RotateClientSecret` it adds a new secret and restarts the latest revision, because a changed secret reaches a
 revision only when the revision restarts or a new one is deployed
 ([manage secrets](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets);
-infra/azure-private/lib/Steps.App.psm1:153-158; infra/azure-private/lib/Steps.App.psm1:172-175). The old secret stays valid until it expires, since `--append` keeps it.
+infra/azure-private/lib/Steps.App.psm1:153-158; infra/azure-private/lib/Steps.App.psm1:175-178). The old secret stays valid until it expires, since `--append` keeps it.
 
 ---
 
@@ -553,7 +553,7 @@ infra/azure-private/lib/Steps.App.psm1:153-158; infra/azure-private/lib/Steps.Ap
 
 The gateway reads `gateway.yaml`, rendered from the admin file `config/gateway-admin.azure-private.json`: the app
 roles it admits, the models and their Foundry deployments, a policy per role with its `availableModels`, the networks
-developers connect from, and the sign-in limits (scripts/admin/new-gateway-config.mjs:238-249). Values specific to the
+developers connect from, and the sign-in limits (scripts/admin/new-gateway-config.mjs:274-332). Values specific to the
 deployment and every secret are `${VAR}` references that the Container App sets as environment variables
 ([secret expansion](https://code.claude.com/docs/en/claude-apps-gateway-config#secret-expansion)).
 
@@ -702,7 +702,7 @@ gateway admits a user who holds an app role and whose email claim ends with `$al
 (config/gateway.azure-private.yaml:20-23). The app is ready when `latest` and `ready` name the same revision. The
 definition's schema is the Container Apps ARM specification
 ([ARM and YAML specification](https://learn.microsoft.com/en-us/azure/container-apps/azure-resource-manager-api-spec)),
-and the script builds the same definition (infra/azure-private/lib/AppDefinition.psm1:6-85).
+and the script builds the same definition (infra/azure-private/lib/AppDefinition.psm1:6-88).
 
 # [Script](#tab/script)
 
@@ -712,7 +712,7 @@ pwsh -File infra/azure-private/Deploy-Gateway.ps1 -Step app -MinReplicas 2 -MaxR
 
 The step checks that config/gateway.azure-private.yaml is the rendering of its admin file, creates the secrets, writes
 the definition to a temporary folder, deploys it and waits for the revision to be ready
-(infra/azure-private/lib/Steps.App.psm1:120-178).
+(infra/azure-private/lib/Steps.App.psm1:120-181).
 
 ---
 
@@ -875,7 +875,7 @@ Measured on 2026-09-29 with `pwsh -File infra/azure-private/Deploy-Gateway.ps1`,
 Verified: network isolation, name resolution, readiness, certificate trust, and Claude in Foundry answering the
 gateway's managed identity through the private endpoint from inside the gateway container (docs/UNKNOWNS.md:68). From
 the test machine, Claude Code's `/login` showed the gateway's certificate fingerprint and got its code accepted by the
-gateway, which handed the browser to Microsoft Entra ID (docs/TEST-PLAN.md:333-333). Not yet verified: the Entra
+gateway, which handed the browser to Microsoft Entra ID (docs/TEST-PLAN.md:355-355). Not yet verified: the Entra
 sign-in and a signed-in request through the gateway, which waited on the tester's multifactor authentication, and the
 VS Code extension and Claude Desktop sign-ins.
 

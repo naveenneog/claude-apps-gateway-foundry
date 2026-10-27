@@ -117,20 +117,23 @@ async function handleAdr0010(req, deps, principal) {
     return json(404, { error: 'no such roles route' });
   }
 
-  if (pathname.startsWith('/api/users/') && method === 'PATCH') {
+  // ADR-0015: business-unit tags in the gateway database, by Entra object ID; nothing is written to Entra.
+  if (pathname.startsWith('/api/user-tags')) {
     const denied = guard(); if (denied) return denied;
-    if (!deps.users) return notConfigured('User tagging');
-    let upn;
-    try { upn = decodeURIComponent(pathname.slice('/api/users/'.length)); } catch { return json(400, { error: 'invalid user in path' }); }
-    if (!upn || upn.includes('/')) return json(400, { error: 'invalid user in path' });
-    if (typeof deps.users.canWrite !== 'function' || !await deps.users.canWrite()) {
-      return json(403, { error: 'User tagging requires the User.ReadWrite.All Microsoft Graph application permission.' });
+    if (!deps.tags) return notConfigured('Business-unit tags');
+    const by = principal.user?.id ?? principal.user?.upn ?? null;
+    if (pathname === '/api/user-tags/import' && method === 'POST') {
+      if (typeof body?.csv !== 'string') return json(400, { error: 'body must be {csv}' });
+      return json(200, await deps.tags.importCsv(body.csv, { resolve: deps.resolveUser ?? (async () => null), by }));
     }
-    const changes = {};
-    for (const key of ['department', 'costCenter']) if (body && key in body) changes[key] = body[key];
-    return json(200, await deps.users.tag(upn, changes));
+    if (method === 'PUT') {
+      let id;
+      try { id = decodeURIComponent(pathname.slice('/api/user-tags/'.length)); } catch { return json(400, { error: 'invalid user in path' }); }
+      if (!id || id.includes('/')) return json(400, { error: 'invalid user in path' });
+      return json(200, await deps.tags.set(id, body ?? {}, by));
+    }
+    return json(404, { error: 'no such user-tags route' });
   }
-
   if (pathname === '/api/client-kit' && method === 'GET') {
     if (!deps.clientKit) return notConfigured('Client files');
     return clientKitAnswer(searchParams, deps.clientKit);
@@ -138,8 +141,8 @@ async function handleAdr0010(req, deps, principal) {
 
   if (pathname === '/api/business-units' && method === 'GET') {
     if (!deps.businessUnits) return notConfigured('Business units');
-    const canTag = !refusal && Boolean(deps.users?.canWrite) && await deps.users.canWrite();
-    return json(200, { ...(await deps.businessUnits.list()), canTag });
+    const status = deps.tags ? await deps.tags.status() : { available: false, reason: 'Business-unit tags are not configured.' };
+    return json(200, { ...(await deps.businessUnits.list()), canTag: !refusal && status.available === true, tagsReason: status.available ? null : status.reason ?? null });
   }
 
   if (pathname === '/api/chargeback' && method === 'GET') {
@@ -154,8 +157,8 @@ async function handleAdr0010(req, deps, principal) {
         headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="chargeback-${period}-${groupBy}-${day}.csv"` },
       };
     }
-    const canTag = !refusal && Boolean(deps.users) && (deps.users.canWrite ? await deps.users.canWrite() : false);
-    return json(200, { ...report, canTag });
+    const status = deps.tags ? await deps.tags.status() : { available: false };
+    return json(200, { ...report, canTag: !refusal && status.available === true });
   }
   return null;
 }
@@ -183,6 +186,7 @@ export async function handleApi(req, deps) {
     // clients throw text built from the response body, never from a request header); logged either way.
     deps.log?.(`admin-ui API error: ${error.message}`);
     const details = error.details && typeof error.details === 'object' ? error.details : {};
-    return json(error.status && error.status < 500 ? error.status : 502, { error: error.message, ...details });
+    // 503 is kept: a missing managed database is a known state the page explains (ADR-0015), not a gateway failure.
+    return json(error.status && (error.status < 500 || error.status === 503) ? error.status : 502, { error: error.message, ...details });
   }
 }

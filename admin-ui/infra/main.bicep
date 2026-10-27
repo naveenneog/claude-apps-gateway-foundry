@@ -173,6 +173,48 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
   dependsOn: [acrPull, gatewayConfigWriter]
 }
 
+// ADR-0014: the spend pacer. A scheduled job rather than a timer in admin-ui, which scales to zero; same image and
+// identity as admin-ui. It reads the admin file and the gateway's admin keys from the gateway app's secrets through
+// the Container Apps Contributor role above, so no key is passed to it here. Container Apps cron is in UTC.
+resource pacerJob 'Microsoft.App/jobs@2024-03-01' = {
+  name: 'job-spend-pacer'
+  location: location
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identity.id}': {} }
+  }
+  properties: {
+    environmentId: environment.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 120
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: { cronExpression: '*/5 * * * *', parallelism: 1, replicaCompletionCount: 1 }
+      registries: [{ server: acrLoginServer, identity: identity.id }]
+      secrets: [
+        { name: 'gateway-admin-file-json', value: gatewayAdminFileJson }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'spend-pacer'
+          image: '${acrLoginServer}/${imageTag}'
+          command: [ 'node', 'server/pacer-job.mjs' ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          env: [
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'GATEWAY_URL', value: gatewayUrl }
+            { name: 'GATEWAY_RESOURCE_ID', value: gatewayApp.id }
+            { name: 'GATEWAY_ADMIN_FILE_JSON', secretRef: 'gateway-admin-file-json' }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, gatewayConfigWriter]
+}
+
 // Container Apps authentication (U-87): the platform signs users in and sets X-MS-CLIENT-PRINCIPAL, removing any copy
 // an external caller sends. No client secret: sign-in uses ID tokens, which carry the roles claim of the app roles
 // assigned to the user (https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra, "Client secret (optional)").

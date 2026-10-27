@@ -262,6 +262,8 @@ async function appSecrets(ctx, { preview, template }) {
   const jwt = registerSecret(live.secrets['jwt-secret'] || newSecret(32));
   const pg = registerSecret(live.secrets['pg-password'] || newSecret(32));
   const admin = registerSecret(live.secrets['admin-write-key'] || newSecret(32));
+  // ADR-0014: the spend pacer's admin key, read by the configuration only once the soft limit is on.
+  const pacer = registerSecret(live.secrets['admin-pacer-key'] || newSecret(32));
   const installedSecret = live.secrets['oidc-client-secret'];
   const plan = keyPlan({ credentials: await passwordCredentials(ctx), ownName: ownKeyName(ctx), now: Date.now(),
     readyRevision: live.readyRevision, readyKeyId: live.readyKeyId,
@@ -269,14 +271,14 @@ async function appSecrets(ctx, { preview, template }) {
     ...(ctx.opts['rotate-client-secret'] ? { minRemainingMs: Infinity } : {}) });
   say(`client secret: ${plan.action === 'reuse' ? `reuse ${plan.keyId}` : 'add a new one'}; secrets with no holder: ${plan.removeNow.join(', ') || 'none'}`);
   if (preview) {
-    return { jwt, pg, admin, oidc: registerSecret(installedSecret || newSecret(32)), credentialId: plan.keyId ?? 'what-if-new-credential', live, rotated: plan.action === 'rotate' };
+    return { jwt, pg, admin, pacer, oidc: registerSecret(installedSecret || newSecret(32)), credentialId: plan.keyId ?? 'what-if-new-credential', live, rotated: plan.action === 'rotate' };
   }
   await removeKeys(ctx, plan.removeNow, 'unused');
-  if (plan.action === 'reuse') return { jwt, pg, admin, oidc: installedSecret, credentialId: plan.keyId, live, rotated: false };
+  if (plan.action === 'reuse') return { jwt, pg, admin, pacer, oidc: installedSecret, credentialId: plan.keyId, live, rotated: false };
   const credential = { displayName: ownKeyName(ctx), endDateTime: secretEndDate(new Date(), ctx.opts.secretDays) };
   const created = (await graph('POST', `/applications/${ctx.state.application.id}/addPassword`, { passwordCredential: credential })).json;
   say(`added client secret ${created.keyId}; it ends ${created.endDateTime}`);
-  return { jwt, pg, admin, oidc: registerSecret(created.secretText), credentialId: created.keyId, live, rotated: true };
+  return { jwt, pg, admin, pacer, oidc: registerSecret(created.secretText), credentialId: created.keyId, live, rotated: true };
 }
 
 // Removes client secrets and confirms each is gone. A secret that remains fails the run; the next app
@@ -360,6 +362,7 @@ async function stepApp(ctx) {
     gatewayJwtSecret: secrets.jwt,
     postgresPassword: database === 'managed' ? databasePassword(secrets.pg) : secrets.pg,
     gatewayAdminWriteKey: secrets.admin,
+    gatewayAdminPacerKey: secrets.pacer,
     ...(saved ? { gatewayAdminFile: saved.adminFile, configUpdatedAt: saved.stamp } : {}),
   });
   if (!out) return;

@@ -55,7 +55,7 @@ node scripts\admin\new-gateway-config.mjs --topology private
 node scripts\admin\new-gateway-config.mjs --topology private --check
 ```
 
-Options are defined at scripts/admin/new-gateway-config.mjs:243-248; rendering does not deploy the change.
+Options are defined at scripts/admin/new-gateway-config.mjs:338-343; rendering does not deploy the change.
 `device_verify` protects against guessing codes: raise it only as needed. Lower limits after rollout if refresh tokens
 enable silent renewal; otherwise size for repeated sign-ins
 ([large rollouts](https://code.claude.com/docs/en/claude-apps-gateway-deploy#large-rollouts)).
@@ -80,7 +80,7 @@ replicas = ceiling(5,000 / 150) = 34
 ```
 
 This is a floor, not a production recommendation. Allow for bursts, uneven routing, overlap and zone loss.
-`-MinReplicas`, `-MaxReplicas` and `-ConcurrentRequests` control the range/target (infra/azure-private/lib/AppDefinition.psm1:76-80).
+`-MinReplicas`, `-MaxReplicas` and `-ConcurrentRequests` control the range/target (infra/azure-private/lib/AppDefinition.psm1:79-83).
 The HTTP target is a scaling signal, not a hard cap
 ([HTTP scaling](https://learn.microsoft.com/en-us/azure/container-apps/scale-app#http)).
 
@@ -144,7 +144,7 @@ Built-in [PgBouncer](https://learn.microsoft.com/en-us/azure/postgresql/connecti
 on General Purpose/Memory Optimized tiers. Compatibility is unvalidated here: test pooling mode, sign-in, spend writes
 and migrations with their [advisory lock](https://code.claude.com/docs/en/claude-apps-gateway-deploy#upgrades) before adopting it.
 
-Startup/liveness probe `/healthz`; readiness probes `/readyz` (infra/azure-private/lib/AppDefinition.psm1:69-71).
+Startup/liveness probe `/healthz`; readiness probes `/readyz` (infra/azure-private/lib/AppDefinition.psm1:72-74).
 The 300-second grace keeps ready replicas in rotation through short failovers. New sign-ins fail; existing tokens validate locally.
 Spend enforcement fails open by default; `enforcement.fail_closed_on_error: true` blocks inference even while ready
 ([outage behavior](https://code.claude.com/docs/en/claude-apps-gateway-deploy#outage-behavior)).
@@ -176,7 +176,7 @@ in order on 429, 5xx, 401, 403, 404 or timeouts. Every request tries the first u
 It waits up to one hour for Foundry to start responding: this is not load balancing or guaranteed prompt failover.
 
 **Example fragment:** separate accounts with deployment mappings. The renderer currently emits a single account
-(scripts/admin/new-gateway-config.mjs:171-175); adopting this needs a renderer change, not an edit to generated output.
+(scripts/admin/new-gateway-config.mjs:224-225); adopting this needs a renderer change, not an edit to generated output.
 
 ```yaml
 upstreams:

@@ -10,11 +10,12 @@ import { fileURLToPath } from 'node:url';
 import { handleApi } from './api.mjs';
 import { createArmClient } from './arm-client.mjs';
 import { capabilities, tokenRoles } from './capabilities.mjs';
-import { buildChargeback, chargebackCsv, collectEffective, listBusinessUnits, PERIODS, tagUser } from './chargeback.mjs';
+import { buildChargeback, chargebackCsv, collectEffective, findUser, listBusinessUnits, PERIODS } from './chargeback.mjs';
 import { createConfigStore } from './gateway-config.mjs';
 import { createGraphClient } from './graph-client.mjs';
 import { getManagedIdentityToken } from './managed-identity.mjs';
 import { createRole, gatewayApplication, listRoles } from './roles.mjs';
+import { createTagStore, gatewayDatabase } from './user-tags.mjs';
 import { adminErrors } from '../../scripts/admin/new-gateway-config.mjs';
 import { listDevelopers, setDeveloper } from '../../scripts/admin/set-developer.mjs';
 
@@ -75,6 +76,22 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
     };
   }
   const currentAdmin = async () => (configStore ? (await configStore.read()).admin : admin);
+  // ADR-0015: business-unit tags in the gateway's managed PostgreSQL, reached with the gateway app's own credential.
+  const tags = createTagStore({
+    credential: async () => (arm ? gatewayDatabase({ arm, resourceId }) : { unavailable: true, reason: 'GATEWAY_RESOURCE_ID is not set, so admin-ui has no gateway app to read the database from.' }),
+  });
+  const tagsOrReason = async () => {
+    const status = await tags.status();
+    if (!status.available) return { unavailable: true, reason: status.reason };
+    try { return await tags.all(); } catch (e) { return { unavailable: true, reason: `Business-unit tags could not be read: ${e.message}` }; }
+  };
+  const resolveUser = async (value) => {
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+      const r = await graph('GET', `/users/${encodeURIComponent(value)}?$select=id`, undefined, { ok: [200, 404] });
+      return r.status === 200 ? r.json.id : null;
+    }
+    return (await findUser(graph, value.toLowerCase()))?.id ?? null;
+  };
   const graphRoles = async () => tokenRoles(await getManagedIdentityToken({ resource: 'https://graph.microsoft.com', clientId, fetch: fetchImpl, cache: graphCache, env }));
 
   return {
@@ -89,16 +106,14 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
       create: (body) => createRole({ graph, servicePrincipalId }, body),
       canCreate: async () => (await graphRoles()).some((r) => ['Application.ReadWrite.OwnedBy', 'Application.ReadWrite.All'].includes(r)),
     },
-    users: {
-      tag: (upn, changes) => tagUser({ graph }, upn, changes),
-      canWrite: async () => (await graphRoles()).some((r) => ['User.ReadWrite.All', 'Directory.ReadWrite.All'].includes(r)),
-    },
+    tags,
+    resolveUser,
     chargeback: {
-      build: async ({ period, groupBy }) => buildChargeback({ rows: PERIODS.includes(period) ? await collectEffective({ gateway, period }) : [], graph, period, groupBy }),
+      build: async ({ period, groupBy }) => buildChargeback({ rows: PERIODS.includes(period) ? await collectEffective({ gateway, period }) : [], graph, period, groupBy, tags: await tagsOrReason() }),
       csv: chargebackCsv,
     },
     businessUnits: {
-      list: async () => listBusinessUnits({ graph, developers: await listDevelopers(developersLive ? await developersLive() : { graph, servicePrincipalId, appRoles }) }),
+      list: async () => listBusinessUnits({ graph, developers: await listDevelopers(developersLive ? await developersLive() : { graph, servicePrincipalId, appRoles }), tags: await tagsOrReason() }),
     },
     // P-41: the gateway's address from its ingress when admin-ui manages it, otherwise the address admin-ui calls.
     clientKit: {
@@ -108,6 +123,7 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
     capabilities: (signInInfo) => capabilities({
       signIn: signInInfo,
       graphToken: () => getManagedIdentityToken({ resource: 'https://graph.microsoft.com', clientId, fetch: fetchImpl, cache: graphCache, env }),
+      tagsStatus: () => tags.status(),
       armPermissions: async () => {
         if (!arm) throw new Error('GATEWAY_RESOURCE_ID is not set, so admin-ui has no gateway app to check');
         return (await arm('GET', `${resourceId}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`)).json?.value ?? [];

@@ -5,14 +5,14 @@
   globalThis.helpTopics = [
     {
       id: 'departments', title: 'Create a department (business unit)',
-      when: 'Group spend by team for chargeback. A department is the Department field of a user in Microsoft Entra ID.',
+      when: 'Group spend by team for chargeback. A department is a tag the console keeps in the gateway database; Entra ID is not changed.',
       steps: [
         'Open Chargeback, then the Business units card.',
-        'Select Edit next to a developer, type a department name and a cost center, then Save. A new name creates the department.',
-        'Repeat for each developer. Everyone with the same department name is one business unit.',
-        'Editing needs the console\'s User.ReadWrite.All permission (Settings > Permissions). Without it, set the Department field in the Microsoft Entra admin center.',
+        'Select Edit next to a developer, type a department name, and a cost center, company, office or division if needed, then Save. A new name creates the department.',
+        'For many developers, select Import CSV and choose a file with the columns user, department, costCenter, company, office and division.',
+        'Everyone with the same department name is one business unit. Tags need the managed database option; the card says so when the gateway has none.',
       ],
-      labels: ['Chargeback', 'Business units', 'Edit', 'Save'],
+      labels: ['Chargeback', 'Business units', 'Edit', 'Save', 'Import CSV'],
       doc: 'docs/learn/how-to-organize-departments.md#create-a-department-in-the-admin-console',
     },
     {
@@ -91,6 +91,17 @@
       ],
       labels: ['Budgets', 'Set cap'],
       doc: 'docs/learn/how-to-manage-users-and-groups.md#set-or-change-a-budget',
+    },
+    {
+      id: 'soft-limit', title: 'Pace the last part of a monthly cap',
+      when: 'Past a share of a person\'s monthly cap, spread the rest over the days left in the month, so it cannot all go in one day.',
+      steps: [
+        'Access & models > Soft limit: turn the switch on and set the share, 80% by default.',
+        'Review changes, then Apply and roll out.',
+        'Every five minutes the spend pacer sets a daily cap for each person past the share. Audit lists each one as spend-pacer (admin key).',
+      ],
+      labels: ['Access & models', 'Soft limit', 'Review changes', 'Apply and roll out'],
+      doc: 'docs/learn/how-to-admin-configure.md#pace-the-last-part-of-a-monthly-cap-with-a-soft-limit',
     },
     {
       id: 'chargeback', title: 'Report spend by department',
