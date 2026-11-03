@@ -875,7 +875,7 @@ Measured on 2026-09-29 with `pwsh -File infra/azure-private/Deploy-Gateway.ps1`,
 Verified: network isolation, name resolution, readiness, certificate trust, and Claude in Foundry answering the
 gateway's managed identity through the private endpoint from inside the gateway container (docs/UNKNOWNS.md:68). From
 the test machine, Claude Code's `/login` showed the gateway's certificate fingerprint and got its code accepted by the
-gateway, which handed the browser to Microsoft Entra ID (docs/TEST-PLAN.md:355-355). Not yet verified: the Entra
+gateway, which handed the browser to Microsoft Entra ID (docs/TEST-PLAN.md:356-356). Not yet verified: the Entra
 sign-in and a signed-in request through the gateway, which waited on the tester's multifactor authentication, and the
 VS Code extension and Claude Desktop sign-ins.
 

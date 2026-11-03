@@ -28,9 +28,36 @@ const parse = (text) => {
   }
 };
 
+// Temporary answers worth asking again: throttling and server-side errors. A 503 HTML page from Azure Resource Manager
+// stopped an install's deployment status poll on 2026-11-03 (T-149).
+// https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/request-limits-and-throttling
+export const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+/**
+ * send() -> a fetch Response. A GET answered with a temporary status, or with no answer, is sent again up to `attempts`
+ * times, waiting Retry-After seconds or a growing delay. Other methods are sent once, so a write is never repeated.
+ */
+export async function sendWithRetry(send, { method, attempts = 5, sleep: wait = sleep } = {}) {
+  const retryable = method === 'GET';
+  for (let attempt = 1; ; attempt++) {
+    const last = !retryable || attempt >= attempts;
+    let response;
+    try {
+      response = await send();
+    } catch (error) {
+      if (last) throw error;
+      await wait(2000 * attempt);
+      continue;
+    }
+    if (last || !TRANSIENT_STATUSES.has(response.status)) return response;
+    const after = Number(response.headers?.get?.('retry-after'));
+    await wait(Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : 2000 * attempt);
+  }
+}
+
 async function call(base, audience, method, path, body, { ok = [200, 201, 202, 204], headers = {} } = {}) {
   const url = /^https:\/\//.test(path) ? path : `${base}${path}`;
-  const response = await fetch(url, {
+  const response = await sendWithRetry(() => fetch(url, {
     method,
     headers: {
       Authorization: `Bearer ${accessToken(audience)}`,
@@ -38,7 +65,7 @@ async function call(base, audience, method, path, body, { ok = [200, 201, 202, 2
       ...headers,
     },
     body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
-  });
+  }), { method });
   const text = await response.text();
   const json = parse(text);
   if (!ok.includes(response.status)) {
