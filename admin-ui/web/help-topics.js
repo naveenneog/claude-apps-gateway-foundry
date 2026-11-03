@@ -4,6 +4,17 @@
 (() => {
   globalThis.helpTopics = [
     {
+      id: 'signin-credential', title: 'Check or renew the gateway sign-in credential',
+      when: 'The gateway signs in to Microsoft Entra ID with its own certificate (or a client secret when the tenant refuses certificates). A daily job renews it 30 days before it ends.',
+      steps: [
+        'Open Settings. The Gateway sign-in credential card shows the type, its identifier and when it ends.',
+        'To replace it now, choose how many months the new certificate is valid for, then select Renew now and confirm.',
+        'The renewal takes a few minutes: a new gateway revision starts with the new credential, then the old one is removed. Developers stay signed in. Check again shows the result.',
+      ],
+      labels: ['Settings', 'Gateway sign-in credential', 'Renew now'],
+      doc: "docs/learn/tutorial-first-install.md#check-the-gateways-sign-in-credential",
+    },
+    {
       id: 'departments', title: 'Create a department (business unit)',
       when: 'Group spend by team for chargeback. A department is a tag the console keeps in the gateway database; Entra ID is not changed.',
       steps: [

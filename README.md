@@ -25,7 +25,10 @@ including the comparison with the Azure API Management (APIM) gateway.
 
 The first tutorial needs Owner on an Azure subscription, a Microsoft Foundry account with Claude models deployed, and
 PowerShell 7, Node.js 22, the Azure CLI and Git on the machine that runs it; its "Before you begin" section lists each
-role and why. Developer machines run Windows, and the gateway accepts connections from one public address range. Claude Desktop through this gateway was tested on
+role and why. Developer machines run Windows. The gateway and the console accept connections from any network and admit only people
+signed in with Microsoft Entra ID who hold a gateway role (ADR-0017); `-TesterCidr` and `-AllowedCidr` limit them to one
+address block. The gateway signs in to Entra with its own certificate, renewed daily by a job, so no client secret is
+renewed by hand (ADR-0016). Claude Desktop through this gateway was tested on
 2026-10-26 (docs/UNKNOWNS.md, U-106). Not yet tested: an Intune assignment in a real tenant (docs/UNKNOWNS.md, U-107).
 
 ## Start the deployment
@@ -45,26 +48,28 @@ $rg = 'rg-claude-gw-eval'
 $foundryRg = '<resource group of your Foundry account>'
 $foundry = '<name of your Foundry account>'
 $admins = az account show --query user.name -o tsv
-$ip = Invoke-RestMethod https://api.ipify.org
-$cidr = "$ip/32"
+$regions = 'eastus2,centralus,westus3'
 
 az cognitiveservices account deployment list -g $foundryRg -n $foundry --query "[].{deployment:name,model:properties.model.name}" -o table
 Copy-Item config/gateway-admin.example.json config/gateway-admin.azure-eval.json
 notepad config/gateway-admin.azure-eval.json
 node scripts/admin/new-gateway-config.mjs --topology test --admin config/gateway-admin.azure-eval.json --out config/gateway.azure-eval.yaml
 
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -DatabaseLocation centralus -Plan
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -DatabaseLocation centralus
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -DatabaseLocation $regions -Plan
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -DatabaseLocation $regions
 ```
+
+To install into a resource group that already exists, such as the one that holds the Foundry account, both
+`Install-ClaudeGateway.ps1` lines also take `-UseExistingResourceGroup` (ADR-0018).
 
 | Step | What it does | Tutorial section |
 |---|---|---|
 | `git clone` to `az extension add` | Gets the files and signs in to the subscription the install goes into | [Get the files and sign in to Azure](docs/learn/tutorial-first-install.md#get-the-files-and-sign-in-to-azure) |
-| `$rg` to `$cidr` | Names the new resource group, the Foundry account, the console's administrators and the address range that may connect; `"$ip/32"` admits this machine only | [Set the values every command uses](docs/learn/tutorial-first-install.md#set-the-values-every-command-uses) |
+| `$rg` to `$regions` | Names the resource group, the Foundry account, the console's administrators and the regions to try, in order, for the managed database | [Set the values every command uses](docs/learn/tutorial-first-install.md#set-the-values-every-command-uses) |
 | `deployment list` | Lists the Claude deployment names the admin file needs | [Find your Claude deployments in Foundry](docs/learn/tutorial-first-install.md#find-your-claude-deployments-in-foundry) |
 | `Copy-Item` to `new-gateway-config.mjs` | Copies the example admin file, opens it to set the deployment names, and checks it | [Write the admin file](docs/learn/tutorial-first-install.md#write-the-admin-file) |
-| `Install-ClaudeGateway.ps1 ... -Plan` | Prints every command the install would run and changes nothing | [Preview the install](docs/learn/tutorial-first-install.md#preview-the-install) |
-| `Install-ClaudeGateway.ps1` | Installs the gateway, its database and the admin console, and prints their addresses | [Run the install](docs/learn/tutorial-first-install.md#run-the-install) |
+| `Install-ClaudeGateway.ps1 ... -Plan` | Runs read-only checks (resource group, Foundry deployments, database regions), prints every command the install would run, and changes nothing | [Preview the install](docs/learn/tutorial-first-install.md#preview-the-install) |
+| `Install-ClaudeGateway.ps1` | Creates the database first in the first region that accepts it, then installs the gateway with its sign-in certificate and the admin console, and prints their addresses | [Run the install](docs/learn/tutorial-first-install.md#run-the-install) |
 
 After the install: [open the admin console](docs/learn/tutorial-first-install.md#open-the-admin-console),
 [give developers access](docs/learn/tutorial-first-install.md#give-developers-access) and

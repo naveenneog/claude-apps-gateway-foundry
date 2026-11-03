@@ -2,6 +2,7 @@
 // and scripts/admin/sync-database-firewall.mjs. arm(method, path, body, options) -> { status, json }, the shape of
 // lib/azure-rest.mjs's arm and admin-ui's arm-client.mjs.
 import { databaseLocationFor, firewallPlan } from './plan.mjs';
+import { isRegionRefusal } from './preflight.mjs';
 
 const PROVIDER_API = 'api-version=2022-09-01';
 const PG_API = 'api-version=2024-08-01';
@@ -78,4 +79,32 @@ export async function finishDatabase({ arm, ctx, out, databaseLocation, save, sa
   Object.assign(ctx.state, { pgServerName: out.pgServerName, databaseLocation });
   save();
   await syncFirewall({ arm, appId: appIdOf(ctx), serverId: serverIdOf(ctx), say });
+}
+
+/**
+ * ADR-0018: the base stage creates the managed database before anything else, trying regions in order. deploy(region)
+ * creates it and returns { pgServerName }; remove(region) deletes what a refused attempt left. Only a region refusal
+ * (isRegionRefusal) moves on; any other error stops. An existing server is kept, if the list names its region.
+ */
+export async function createDatabaseFirst({ regions, existing, deploy, remove, say = () => {} }) {
+  if (existing) {
+    if (!regions.includes(existing.location)) throw new Error(`the managed database is already in ${existing.location} (${existing.name}); add ${existing.location} to -DatabaseLocation or remove the server`);
+    say(`database: ${existing.name} already exists in ${existing.location}; kept`);
+    return { databaseLocation: existing.location, pgServerName: existing.name };
+  }
+  const refused = [];
+  for (const region of regions) {
+    say(`database: creating the managed PostgreSQL server in ${region} first, so a refused region shows now and not at the end`);
+    try {
+      const { pgServerName } = await deploy(region);
+      say(`database: ${pgServerName} created in ${region}`);
+      return { databaseLocation: region, pgServerName };
+    } catch (error) {
+      if (!isRegionRefusal(error.message)) throw error;
+      refused.push(region);
+      say(`database: ${region} refused the server (${error.message.split('\n').at(-1).trim().slice(0, 200)}); cleaning up and trying the next region`);
+      await remove(region);
+    }
+  }
+  throw new Error(`database: no region could create the server: ${refused.join(', ')} refused. Add regions to -DatabaseLocation, for example -DatabaseLocation ${[...refused, 'centralus', 'westus3'].filter((r, i, a) => a.indexOf(r) === i).join(',')}`);
 }

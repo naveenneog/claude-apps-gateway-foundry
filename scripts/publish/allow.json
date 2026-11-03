@@ -2,6 +2,20 @@
   "_readme": "Values scripts/publish/check-public.mjs accepts (ADR-0006, T-75). Each entry needs a why; an entry without one suppresses nothing. Adding an entry is a publication decision: name the file that needs it and why the value can be public.",
   "allow": [
     {
+      "rule": "public-ipv4",
+      "value": "2.5.4.3",
+      "why": "Not an address: the X.509 object identifier of the common name attribute (RFC 5280), which infra/azure-test/lib/x509.mjs encodes in the gateway's sign-in certificate (ADR-0016)."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "2.5.29.19",
+      "why": "Not an address: the X.509 object identifier of the basicConstraints extension (RFC 5280), used by infra/azure-test/lib/x509.mjs (ADR-0016)."
+    },
+    {
+      "rule": "public-ipv4",
+      "value": "2.5.29.15",
+      "why": "Not an address: the X.509 object identifier of the keyUsage extension (RFC 5280), used by infra/azure-test/lib/x509.mjs (ADR-0016)."
+    },    {
       "rule": "aca-host",
       "value": "politebush-4e216865.northcentralus",
       "why": "The environment of the network-restricted example deployment (ADR-0005): its host names have no public DNS record and the environment has no public address (T-16); the tutorial's screenshots show it (ADR-0006)."

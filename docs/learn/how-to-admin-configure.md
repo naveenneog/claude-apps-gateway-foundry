@@ -133,9 +133,9 @@ docs/adr/0014-soft-limit-and-daily-spend-pacing.md:24-27).
 
 | Part | What it does | Source |
 |---|---|---|
-| `job-spend-pacer` | A Container Apps job that runs every five minutes, from the admin console's image and identity. It reads each person's spend and caps from the gateway's admin API and sets, changes or deletes their daily cap. | admin-ui/infra/main.bicep:179-192 |
+| `job-spend-pacer` | A Container Apps job that runs every five minutes, from the admin console's image and identity. It reads each person's spend and caps from the gateway's admin API and sets, changes or deletes their daily cap. | admin-ui/infra/main.bicep:201-215 |
 | `spend-pacer` key | The job writes with its own key, so the console's **Audit** page lists its changes as `spend-pacer (admin key)`. It deletes only the daily caps it set. | admin-ui/server/pacer-job.mjs:45 |
-| `admin-pacer-key` | The secret that holds the job's key on the gateway app, as `GATEWAY_ADMIN_PACER_KEY`. The installer's `app` stage creates it and keeps its value on later runs. | infra/azure-test/gateway-test.json:239, infra/azure-test/deploy.mjs:266 |
+| `admin-pacer-key` | The secret that holds the job's key on the gateway app, as `GATEWAY_ADMIN_PACER_KEY`. The installer's `app` stage creates it and keeps its value on later runs. | infra/azure-test/gateway-test.json:239, infra/azure-test/lib/credentials.mjs:50 |
 
 Rules:
 

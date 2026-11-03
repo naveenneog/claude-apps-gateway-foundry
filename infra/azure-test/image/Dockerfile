@@ -2,11 +2,11 @@
 # Recipe: https://code.claude.com/docs/en/claude-apps-gateway-deploy#container-image
 # The release is trusted only after verify-release.sh checks the signed manifest, the signing key's
 # fingerprint and the pinned checksum. Build: az acr build --registry <acr> --image <name> <this dir>
-ARG BASE_IMAGE=mcr.microsoft.com/azurelinux/base/core:3.0@sha256:34a22db497ff34a0f35ca5fc54bd38711d04238a2c1b2f65d35dc9d45dd82584
+ARG BASE_IMAGE=mcr.microsoft.com/azurelinux/base/core:3.0@sha256:88fc2b4a425801b3b4d8fe5342e24fb6134669fb718ec970340bdd36dee50c35
 
 FROM ${BASE_IMAGE} AS fetch
-ARG CLAUDE_VERSION=2.1.280
-ARG CLAUDE_SHA256=1e08503dbdf3c2cb0d706d32f3408277388d1c76ef108673e8fe42c1b322925b
+ARG CLAUDE_VERSION=2.1.311
+ARG CLAUDE_SHA256=86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada
 ARG CLAUDE_KEY_FINGERPRINT=31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
 ARG RELEASES=https://downloads.claude.ai/claude-code-releases
 RUN tdnf install -y ca-certificates curl gnupg2 grep coreutils && tdnf clean all

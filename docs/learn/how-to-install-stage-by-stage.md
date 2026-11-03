@@ -18,8 +18,8 @@ grant, is marked in [Prerequisites](#prerequisites). A gateway with no public en
 [glossary](glossary.md).
 
 `infra/azure-test/Install-ClaudeGateway.ps1` (ADR-0009) runs seven stages in a fixed order, `config`, `base`, `entra`,
-`image`, `app`, `budgets`, `admin-ui` (infra/azure-test/Install-ClaudeGateway.ps1:120), and stops at the first one
-that fails, naming its section of this article (infra/azure-test/Install-ClaudeGateway.ps1:197-205). `config`
+`image`, `app`, `budgets`, `admin-ui` (infra/azure-test/Install-ClaudeGateway.ps1:129), and stops at the first one
+that fails, naming its section of this article (infra/azure-test/Install-ClaudeGateway.ps1:209-222). `config`
 touches no Azure resource, so an admin file with a mistake stops the install before anything is created. `admin-ui`
 runs last because its final step, the Microsoft Graph permission grant, needs a directory role that this project's installs
 activated through Privileged Identity Management for the grant (docs/UNKNOWNS.md, U-75); a refusal there leaves every other stage done.
@@ -30,7 +30,7 @@ with the tools, the expected output of each step and developer onboarding with I
 
 The `base`, `entra`, `image` and `app` stages build the single-tenant test topology of ADR-0003. A deployment whose
 Foundry account is in another Entra tenant, such as the Contoso gateway (docs/UNKNOWNS.md, U-80), holds a credential
-added by hand, and the `app` stage stops rather than delete it (infra/azure-test/deploy.mjs:255-260); against such a
+added by hand, and the `app` stage stops rather than delete it (infra/azure-test/lib/credentials.mjs:39-44); against such a
 deployment only `budgets` and `admin-ui` apply.
 
 ## Prerequisites
@@ -40,7 +40,7 @@ deployment only `budgets` and `admin-ui` apply.
 | Every stage | PowerShell 7, Node.js 22 or later, this repository, and the [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) signed in to the tenant and subscription of the deployment: `az login`, then `az account set --subscription "<name or ID>"`; `az account show` names the subscription the stages use |
 | `base`, `app` | Owner on the subscription: `base` grants the gateway's identity a role on the Foundry account, which may be in another resource group (infra/azure-test/gateway-test.json:107-143) |
 | `entra` | An account that may register applications in the tenant (docs/UNKNOWNS.md, U-1) |
-| `budgets` | The gateway deployed with `deployment.adminApi: true`; the `app` stage creates the key it reads (infra/azure-test/deploy.mjs:262-264) |
+| `budgets` | The gateway deployed with `deployment.adminApi: true`; the `app` stage creates the key it reads (infra/azure-test/lib/credentials.mjs:46-48) |
 | `admin-ui`'s Graph grant | Privileged Role Administrator, or Global Administrator: Microsoft names Privileged Role Administrator for granting Microsoft Graph permissions to a managed identity ([grant API permissions to managed identities](https://learn.microsoft.com/en-us/powershell/entra-powershell/grant-api-permissions-managed-identity)) |
 
 ## The admin file
@@ -54,7 +54,7 @@ range of what it created, and later stages and scripts read it.
 The installer reads one admin file, the same one `new-gateway-config.mjs`, `set-developer.mjs` and
 `bootstrap-budgets.mjs` read ([configure models, roles and developer access](how-to-admin-configure.md)). Besides
 `roles`, `models` and `policies`, the installer needs `deployment.adminApi: true` when it runs `admin-ui`, or `budgets`
-with budgets declared, and refuses to start without it (infra/azure-test/Install-ClaudeGateway.ps1:178-183).
+with budgets declared, and refuses to start without it (infra/azure-test/Install-ClaudeGateway.ps1:190-195).
 `deployment.emailClaim: preferred_username` is for a tenant whose accounts have no mail address (docs/UNKNOWNS.md,
 U-81). Each `budgets` row is a spend cap ([script reference](reference-scripts.md#bootstrap-budgetsmjs)). The commands in
 this article use this example. `config/gateway-admin.example.json` is a valid starting point that also sets the
@@ -105,10 +105,10 @@ instead. Container Apps outbound addresses can change
 
 B1ms can be refused in a region with `SkuNotAvailable`
 ([resolve capacity errors](https://learn.microsoft.com/en-us/azure/postgresql/troubleshoot/how-to-resolve-capacity-errors)).
-`-ClientSecretDays <1-30>` on the installer, or `--client-secret-days` on `deploy.mjs --step app`, sets the lifetime
-of a client secret the stage creates, 7 days by default; the stage renews the secret when it runs with less than a day
-left (docs/adr/0003-azure-test-deployment-with-restricted-ingress.md:91). `-DatabaseLocation <region>` on the installer, or `--database-location <region>` on `deploy.mjs --step app`, places the
-server in another region; the stage keeps that region on later runs (docs/UNKNOWNS.md, U-105).
+`-DatabaseLocation` on the installer takes one region or a comma-separated list, such as `eastus2,centralus,westus3`.
+The `preflight` stage skips a region that does not offer the server to the subscription, and the `base` stage creates the
+server first, in the first region that accepts it, before anything else (infra/azure-test/lib/database.mjs:89). Later
+runs keep the server's region (docs/UNKNOWNS.md, U-105 and U-135).
 
 An existing sidecar deployment moves with `move-to-managed-database.mjs`
 ([script reference](reference-scripts.md#move-to-managed-databasemjs)). The move starts one revision with an empty
@@ -116,45 +116,44 @@ database; set the caps again afterwards with `bootstrap-budgets.mjs`.
 
 ## Run the installer
 
-`-TesterCidr` is the public address range allowed to reach the gateway, in CIDR notation (address/prefix length,
-[RFC 4632](https://www.rfc-editor.org/rfc/rfc4632)). `203.0.113.0/26`, in the README and the scripts' help, is a documentation range
-([RFC 5737](https://www.rfc-editor.org/rfc/rfc5737)). The installer accepts it, but no machine
-connects from it, so every request then gets `RBAC: access denied`; a deployment uses the range the administrator's
-machine connects from. The installer refuses a range wider than `/24` and a private range
-(infra/azure-test/lib/plan.mjs:43-54). `(Invoke-RestMethod https://api.ipify.org)` prints the current public IPv4
-address, and `<address>/32` admits that one address; a network with several egress addresses needs its full range
-from the network team. A caller outside the range gets HTTP 403 with the body `RBAC: access denied`
-([IP restrictions](https://learn.microsoft.com/en-us/azure/container-apps/ip-restrictions)).
+The gateway and the admin console accept connections from any network by default; the gateway admits only people signed
+in with Microsoft Entra ID who hold a gateway role, and the console only its administrators
+(infra/azure-test/Install-ClaudeGateway.ps1:191). `-TesterCidr <block>` limits the gateway, and `-AllowedCidr <block>`
+the console, to one public address block in CIDR notation ([RFC 4632](https://www.rfc-editor.org/rfc/rfc4632)), `/24`
+or narrower; the installer refuses a wider block and a private range (infra/azure-test/lib/plan.mjs:43-54). A caller
+outside a block gets HTTP 403 with the body `RBAC: access denied`
+([IP restrictions](https://learn.microsoft.com/en-us/azure/container-apps/ip-restrictions)). `203.0.113.0/26` is a documentation range ([RFC 5737](https://www.rfc-editor.org/rfc/rfc5737)) that no machine connects
+from, used in the README and the scripts' help.
 
-The commands in this article read four PowerShell variables: `$cidr`, the range; `$admins`, who may open the admin
-console, as user principal names separated by commas; and `$foundryRg` and `$foundry`, the resource group and name of
-the Microsoft Foundry account, which the installer requires for the `base` and `app` stages
-(infra/azure-test/Install-ClaudeGateway.ps1:169-170). The admin console is admin-only: the installer refuses the
-`admin-ui` stage without `-SignInAdmins`, and `-NoSignIn` deploys it without sign-in
-(infra/azure-test/Install-ClaudeGateway.ps1:173-174).
+The commands in this article read three PowerShell variables: `$admins`, who may open the admin console, as user
+principal names separated by commas; and `$foundryRg` and `$foundry`, the resource group and name of the Microsoft
+Foundry account, which the installer requires for the `preflight`, `base` and `app` stages. The admin console is
+admin-only: the installer refuses the `admin-ui` stage without `-SignInAdmins`, and `-NoSignIn` deploys it without
+sign-in, which then requires `-AllowedCidr`.
 
 ```powershell
-$state = 'infra/azure-test/.state/rg-claude-gw-eval.json'
-$cidr = if (Test-Path $state) { (Get-Content $state -Raw | ConvertFrom-Json).testerCidr } else { "$(Invoke-RestMethod https://api.ipify.org)/32" }
 $admins = az account show --query user.name -o tsv
 $foundryRg = '<Foundry resource group>'
 $foundry = '<Foundry account name>'
 ```
 
-`-TesterCidr` on a later run replaces the range on the gateway and, through `-AllowedCidr`, on the console; the
-installer without `-TesterCidr` uses the range the state file records (infra/azure-test/Install-ClaudeGateway.ps1:150-158).
+A later run keeps the address choice the state file records; `-TesterCidr` or `-AllowedCidr` on a later run replaces it,
+and `-GatewayAllowAnyAddress` or `-ConsoleAllowAnyAddress` opens the app to every address again. `-UseExistingResourceGroup`
+installs into a group that already exists, such as the one that holds the Foundry account: the installer adds its
+resources next to what is there, stops if one there is named like a resource it creates, and teardown removes only the
+resources tagged with this install's `runId` (infra/azure-test/lib/existing-group.mjs:31).
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -SignInAdmins $admins -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -Plan
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -SignInAdmins $admins -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -SignInAdmins $admins -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -Plan
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -SignInAdmins $admins -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval
 ```
 
-`-Plan` prints each stage's command line and runs none of them. In a subscription other than the original test one,
+`-Plan` runs the read-only `preflight` stage and prints every other stage's command line without running it. In a subscription other than the original test one,
 `-FoundryResourceGroup` and `-FoundryAccount` name the Foundry account the gateway serves from, and `-EmailDomain`
-is needed when the signed-in account has no mail address (infra/azure-test/deploy.mjs:156-157). `-Steps` runs a subset,
+is needed when the signed-in account has no mail address (infra/azure-test/deploy.mjs:213-214). `-Steps` runs a subset,
 always in the order above; asking for `app` also runs `config`, so a stale rendering is never deployed
-(infra/azure-test/Install-ClaudeGateway.ps1:136). The tester range must hold this machine's egress address, which can
-change between requests (docs/UNKNOWNS.md, U-33). On 2026-10-21 one run of all seven stages into an empty resource
+(infra/azure-test/Install-ClaudeGateway.ps1:146). With `-TesterCidr`, the block must hold this machine's egress address, which can change between requests
+(docs/UNKNOWNS.md, U-33). On 2026-10-21 one run of all seven stages into an empty resource
 group completed the first six in about eight minutes and stopped at the Graph grant, refused with
 `Authorization_RequestDenied`; a second run of `app` and `budgets` changed no secret and replaced both caps in place
 (docs/TEST-PLAN.md, T-91, T-95).
@@ -162,16 +161,16 @@ group completed the first six in about eight minutes and stopped at the Graph gr
 ## Resume after a manual step
 
 Only the scripts write `infra/azure-test/.state/<resource group>.json`, the record `entra`, `image` and `app` read
-from earlier stages (infra/azure-test/deploy.mjs:38-45), so after a step done by hand the stage runs again to
+from earlier stages (infra/azure-test/deploy.mjs:42-49), so after a step done by hand the stage runs again to
 record it, or the record is completed by hand where the table says so.
 
 | Stage | After a manual step |
 |---|---|
 | `config` | Run it again; it only writes the rendering |
 | `base` | Deploy the same template by hand, then run the stage again: it finds every resource in place and records their names |
-| `entra` | Add the registration's identifiers to the state file before running it again; otherwise it registers a second application (infra/azure-test/deploy.mjs:162-164) |
-| `image` | Run it again; it imports PostgreSQL when the registry lacks it, builds the gateway image again and records both digests, which `app` deploys (infra/azure-test/deploy.mjs:205-225); an image built by hand is not used |
-| `app` | Run it again; it keeps the live app's JWT secret, database password and admin key (infra/azure-test/deploy.mjs:262-264) |
+| `entra` | Add the registration's identifiers to the state file before running it again; otherwise it registers a second application (infra/azure-test/deploy.mjs:219-221) |
+| `image` | Run it again; it imports PostgreSQL when the registry lacks it, builds the gateway image again and records both digests, which `app` deploys (infra/azure-test/deploy.mjs:262-284); an image built by hand is not used |
+| `app` | Run it again; it keeps the live app's JWT secret, database password and admin key (infra/azure-test/lib/credentials.mjs:46-48) |
 | `budgets` | Nothing to record; the gateway keeps the caps |
 | `admin-ui` | Run it again; a Graph permission already granted is reported and not granted twice |
 
@@ -188,6 +187,31 @@ node scripts/admin/new-gateway-config.mjs --topology test --admin config/gateway
 The rendering is a local file and has no portal equivalent. A refused admin file is reported field by field, and
 nothing is written (scripts/admin/new-gateway-config.mjs:31-85).
 
+## preflight
+
+**Read-only checks before anything is created ([ADR-0018](../adr/0018-existing-resource-group-preflight-and-database-first.md)).**
+
+Performed by: the account that runs the install. Nothing in Azure or Entra changes, and `-Plan` runs this stage too.
+
+```powershell
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -DatabaseLocation eastus,centralus -Plan
+```
+
+Each check prints one line, `PASS`, `WARN` or `FAIL` (infra/azure-test/lib/preflight.mjs:51):
+
+| Check | `FAIL` when |
+|---|---|
+| Resource group | It exists, was not created by the installer, and `-UseExistingResourceGroup` is not given; or it holds a resource named like one the installer creates (for example `ca-claude-gw`) that this install did not make |
+| Foundry account | The account is not in `-FoundryResourceGroup`, the signed-in account may not read it, or it has no deployment named in the admin file's `models[].deployment` |
+| Database regions | With `deployment.database` `managed`: no region in `-DatabaseLocation` offers PostgreSQL 16 on Burstable `Standard_B1ms` to this subscription. A region that does not is a `WARN` and is skipped |
+
+The region check reads the subscription's PostgreSQL capabilities
+([Resolve capacity errors](https://learn.microsoft.com/en-us/azure/postgresql/troubleshoot/how-to-resolve-capacity-errors)).
+A region can pass and still refuse at creation time, so the `base` stage creates the database first and moves to the
+next region on a refusal (infra/azure-test/lib/database.mjs:89).
+
+---
+
 ## base
 
 **Resource group, container registry, managed identity, Log Analytics workspace, Container Apps environment, and the
@@ -196,10 +220,12 @@ identity's role on the Foundry account.**
 Performed by: an Azure administrator with Owner on the subscription ([Prerequisites](#prerequisites)).
 
 ```powershell
-node infra/azure-test/deploy.mjs --tester-cidr $cidr --step base --resource-group rg-claude-gw-eval --foundry-resource-group $foundryRg --foundry-account $foundry
+node infra/azure-test/deploy.mjs --any-address --step base --resource-group rg-claude-gw-eval --foundry-resource-group $foundryRg --foundry-account $foundry
 ```
 
-The resource group carries a `purpose` and a `runId` tag that every later run checks (infra/azure-test/deploy.mjs:131-143).
+A resource group the stage creates carries a `purpose` and a `runId` tag that every later run checks; with
+`--use-existing-resource-group` the stage uses a group without them and tags only what it creates. With the managed
+database, the stage creates the database server first (see [preflight](#preflight)) (infra/azure-test/deploy.mjs:138-157).
 The template derives the registry's and the workspace's names from the resource group's ID
 (infra/azure-test/gateway-test.json:29-32), so the way to create the same resources by hand is to deploy that template.
 
@@ -216,7 +242,7 @@ The template derives the registry's and the workspace's names from the resource 
 # [Script](#tab/script-base)
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -Steps base -FoundryResourceGroup $foundryRg -FoundryAccount $foundry
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -Steps base -FoundryResourceGroup $foundryRg -FoundryAccount $foundry
 ```
 
 ---
@@ -228,10 +254,10 @@ pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-g
 Performed by: an account that may register applications in the tenant ([Prerequisites](#prerequisites)).
 
 ```powershell
-node infra/azure-test/deploy.mjs --tester-cidr $cidr --step entra --resource-group rg-claude-gw-eval --app-display-name claude-apps-gateway-eval
+node infra/azure-test/deploy.mjs --any-address --step entra --resource-group rg-claude-gw-eval --app-display-name claude-apps-gateway-eval
 ```
 
-Needs `base`: the redirect URI is the gateway host name `base` created (infra/azure-test/deploy.mjs:153). The app
+Needs `base`: the redirect URI is the gateway host name `base` created (infra/azure-test/deploy.mjs:210). The app
 roles, the `email` optional claim and the delegated permissions come from `infra/azure-test/entra-app.json`.
 `set-developer.mjs` assigns a role by the ID that manifest gives it, so a registration made by hand carries the same
 role IDs (scripts/admin/set-developer.mjs:77, scripts/admin/set-developer.mjs:102).
@@ -255,24 +281,24 @@ role IDs (scripts/admin/set-developer.mjs:77, scripts/admin/set-developer.mjs:10
 # [Script](#tab/script-entra)
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -Steps entra -AppRegistrationName claude-apps-gateway-eval
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -Steps entra -AppRegistrationName claude-apps-gateway-eval
 ```
 
 ---
 
 ## image
 
-**PostgreSQL 16 imported, and the gateway image built, through ACR Tasks.**
+**The gateway image built through ACR Tasks, and, for the in-app database only, PostgreSQL 16 imported.**
 
 Performed by: the Azure administrator who ran `base`.
 
 ```powershell
-node infra/azure-test/deploy.mjs --tester-cidr $cidr --step image --resource-group rg-claude-gw-eval
+node infra/azure-test/deploy.mjs --any-address --step image --resource-group rg-claude-gw-eval
 ```
 
-Needs `base`: the registry name comes from its record (infra/azure-test/deploy.mjs:207-208). The tag is the pinned
+Needs `base`: the registry name comes from its record (infra/azure-test/deploy.mjs:264-265). The tag is the pinned
 Claude Code version plus a timestamp, and the record holds each image's digest, which `app` deploys
-(infra/azure-test/deploy.mjs:214-223).
+(infra/azure-test/deploy.mjs:273-282).
 
 # [Azure CLI](#tab/cli-image)
 
@@ -289,7 +315,7 @@ These commands run in Azure Cloud Shell too. Run the `image` stage afterwards: o
 # [Script](#tab/script-image)
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -Steps image
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -Steps image
 ```
 
 ---
@@ -301,13 +327,16 @@ pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-g
 Performed by: an Azure administrator with Owner on the subscription ([Prerequisites](#prerequisites)).
 
 ```powershell
-node infra/azure-test/deploy.mjs --tester-cidr $cidr --step app --resource-group rg-claude-gw-eval --config config/gateway.azure-eval.yaml --foundry-resource-group $foundryRg --foundry-account $foundry --client-secret-days 30
+node infra/azure-test/deploy.mjs --any-address --step app --resource-group rg-claude-gw-eval --config config/gateway.azure-eval.yaml --foundry-resource-group $foundryRg --foundry-account $foundry
 ```
 
 Before it changes anything, the stage stops when the rendering references a `${VAR}` the template does not set,
-because the gateway would not boot (infra/azure-test/deploy.mjs:346-347), and when the live app holds secrets or
-variables the template does not define, which a redeploy would delete (infra/azure-test/deploy.mjs:255-260). It
-generates the admin API key once and keeps the live one on every later run (infra/azure-test/deploy.mjs:264).
+because the gateway would not boot (infra/azure-test/deploy.mjs:328-329), and when the live app holds secrets or
+variables the template does not define, which a redeploy would delete (infra/azure-test/lib/credentials.mjs:39-44). It
+generates the admin API key once and keeps the live one on every later run. For Entra sign-in it makes a self-signed
+certificate, registers it on the app registration, and deploys it as the secret `oidc-certificate`; a later run keeps a
+certificate with more than 30 days left (infra/azure-test/lib/credentials.mjs:67). `--sign-in secret` uses a client
+secret of `--client-secret-days` days, 365 by default, instead.
 
 # [Azure portal](#tab/portal-app)
 
@@ -316,7 +345,8 @@ generates the admin API key once and keeps the live one on every later run (infr
    ([deploy resources with ARM templates and the Azure portal](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-portal)).
 1. **Edit parameters**, since `gatewayConfigYaml` holds line breaks: `gatewayImage` and `postgresImage` are the
    digests in the state file's `images`; `oidcClientId` its `application.appId`; `allowedEmailDomain` its
-   `tester.emailDomain`; `oidcClientSecret` a new client secret from the registration's **Certificates & secrets**;
+   `tester.emailDomain`; `oidcClientSecret` a new client secret from the registration's **Certificates & secrets**, as a
+portal deployment uses a client secret;
    `gatewayJwtSecret`, `postgresPassword` and `gatewayAdminWriteKey` 64 random hexadecimal characters each;
    `gatewayConfigYaml` the content of the rendering.
 1. **Review + create** > **Create**, then run the `app` stage again: it keeps those three secrets, replaces the client
@@ -328,7 +358,7 @@ Where a deployment fails, **Container Apps** > `ca-claude-gw` > **Revisions and 
 # [Script](#tab/script-app)
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -Steps app -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -ClientSecretDays 30
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -Steps app -FoundryResourceGroup $foundryRg -FoundryAccount $foundry
 ```
 
 ---
@@ -366,8 +396,13 @@ Performed by: the Azure administrator for the deployment; the Microsoft Graph gr
 Role Administrator or Global Administrator ([Prerequisites](#prerequisites)).
 
 ```powershell
-pwsh -File admin-ui/infra/Deploy-AdminUi.ps1 -ResourceGroup rg-claude-gw-eval -AcrName <registry> -AppRegistrationName claude-apps-gateway-eval -AdminFile config/gateway-admin.azure-eval.json -AllowedCidr $cidr -Topology test -EnableSignIn -SignInAdmins $admins
+pwsh -File admin-ui/infra/Deploy-AdminUi.ps1 -ResourceGroup rg-claude-gw-eval -AcrName <registry> -AppRegistrationName claude-apps-gateway-eval -AdminFile config/gateway-admin.azure-eval.json -Topology test -EnableSignIn -SignInAdmins $admins -AllowAnyAddress
 ```
+
+`-AllowAnyAddress` deploys the console with no IP rule; `-AllowedCidr <block>` instead limits it to one block. The stage
+also deploys `job-signin-renewer`, which renews the gateway's sign-in certificate or client secret 30 days before it
+ends, with the console's identity; it needs the Microsoft Graph grant below and the console's ownership of the gateway's
+app registration, which the stage adds after the grant (admin-ui/infra/main.bicep, `renewerJob`).
 
 The Container App and its identity can be deployed from the portal; the Graph grant cannot.
 
@@ -410,7 +445,7 @@ The Container App and its identity can be deployed from the portal; the Graph gr
 # [Script](#tab/script-adminui)
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -Steps admin-ui -SignInAdmins $admins -AppRegistrationName claude-apps-gateway-eval
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -Steps admin-ui -SignInAdmins $admins -AppRegistrationName claude-apps-gateway-eval
 ```
 
 ---

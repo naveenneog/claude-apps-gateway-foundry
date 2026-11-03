@@ -127,7 +127,7 @@ renewal, an address-range change and a database-region retry all need that step.
 Options: (a) refuse, and tell the operator to stop using the console, which defeats this ADR; (b) deploy the repository's
 admin file over the console's, which loses the console's edits; (c) when the app holds `gateway-admin-file`, deploy that
 secret, the `CONFIG_UPDATED_AT` value and the `gateway-config` the console rendered, and print that the local file is
-not deployed. Chosen: (c), in `templateForConsole` and `consoleConfig` (infra/azure-test/lib/plan.mjs:149-170). The
+not deployed. Chosen: (c), in `templateForConsole` and `consoleConfig` (infra/azure-test/lib/plan.mjs:156-180). The
 console remains the one writer of the configuration after its first save; settings added by hand are still refused. Live
 check on Contoso, 2026-10-25: `--step app --what-if` no longer named the two console settings and still refused the
 hand-added cross-tenant credential.

@@ -51,6 +51,15 @@ export function assertTesterCidr(text, { minPrefix = 24 } = {}) {
   return `${formatIpv4(network)}/${prefix}`;
 }
 
+// ADR-0017: the gateway's ingress range. --any-address opens it to every address (0.0.0.0/0, which assertTesterCidr
+// refuses on purpose, so the wide range always needs the explicit option); otherwise the tester range is checked.
+export function ingressRange({ testerCidr, anyAddress = false }) {
+  if (anyAddress && testerCidr) throw new Error('pass either --tester-cidr or --any-address, not both');
+  if (anyAddress) return '0.0.0.0/0';
+  if (!testerCidr) throw new Error('pass --tester-cidr <range> or --any-address');
+  return assertTesterCidr(testerCidr);
+}
+
 // Smallest aligned range that holds every sampled egress address (docs/UNKNOWNS.md, U-33).
 export function coveringCidr(ips) {
   if (!ips.length) throw new Error('coveringCidr needs at least one address');
@@ -88,10 +97,17 @@ export function secretEndDate(now, days = 7) {
   return new Date(now.getTime() + days * DAY_MS).toISOString();
 }
 
-// --client-secret-days as given on the command line: absent means 7.
+// --client-secret-days as given on the command line: absent means 365 (ADR-0016, amended 2026-11-03).
 export function secretDays(text) {
-  if (text === undefined) return 7;
-  if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > 30) throw new Error(`--client-secret-days must be 1 to 30, got '${text}'`);
+  if (text === undefined) return 365;
+  if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > 365) throw new Error(`--client-secret-days must be 1 to 365, got '${text}'`);
+  return Number(text);
+}
+
+// ADR-0016: --credential-months, the sign-in certificate's validity; absent means 12.
+export function credentialMonths(text) {
+  if (text === undefined) return 12;
+  if (!/^[0-9]+$/.test(text) || Number(text) < 1 || Number(text) > 24) throw new Error(`--credential-months must be 1 to 24, got '${text}'`);
   return Number(text);
 }
 
@@ -140,8 +156,11 @@ function appSettingsOf(template) {
 
 // What redeploying the template would delete from the live app: secrets and gateway variables added by hand, such as a
 // cross-tenant Foundry credential (docs/UNKNOWNS.md, U-80). live is { secretNames, gatewayEnv }.
+// ADR-0016: either sign-in setting belongs to the template, so a switch between a secret and a certificate is not refused.
+const SIGN_IN = { secrets: ['oidc-client-secret', 'oidc-certificate'], env: ['OIDC_CLIENT_SECRET', 'GATEWAY_IDP_PEM'] };
 export function unmanagedAppSettings(live, template) {
-  const own = appSettingsOf(template);
+  const tpl = appSettingsOf(template);
+  const own = { secrets: [...tpl.secrets, ...SIGN_IN.secrets], env: [...tpl.env, ...SIGN_IN.env] };
   return [...live.secretNames.filter((n) => !own.secrets.includes(n)).map((n) => `secret ${n}`),
     ...live.gatewayEnv.filter((n) => !own.env.includes(n)).map((n) => `environment variable ${n}`)];
 }
@@ -195,12 +214,30 @@ export function templateForDatabase(template, database) {
   return out;
 }
 
-// The managed database's region (U-105): an explicit option, else the one recorded when the server was created, else
-// the app's. A different option from the recorded one is refused, because the template would create a second server.
+// ADR-0018: the managed database on its own, created by the base stage before anything else: the template's
+// PostgreSQL resources and pgServerName output, with the same parameters and variables, so the names match.
+export function templateForDatabaseFirst(template) {
+  const out = structuredClone(template);
+  out.resources = out.resources.filter((r) => r.type.startsWith('Microsoft.DBforPostgreSQL/'));
+  out.outputs = { pgServerName: out.outputs.pgServerName };
+  return out;
+}
+
+// ADR-0018: --database-location as a comma-separated list of region names, tried in order; absent means the app's.
+export function databaseRegions(option, location) {
+  if (option === undefined) return [location];
+  const regions = String(option).split(',').map((r) => r.trim());
+  const bad = regions.find((r) => !/^[a-z0-9]+$/.test(r));
+  if (bad !== undefined) throw new Error(`--database-location takes region names such as eastus or eastus,centralus, not ${JSON.stringify(option)}`);
+  return [...new Set(regions)];
+}
+
+// The managed database's region (U-105): the one recorded when the server was created, else the first the option
+// lists, else the app's. A recorded region the option does not list is refused: the template would create a second server.
 export function databaseLocationFor({ option, state, location }) {
-  if (option !== undefined && !/^[a-z0-9]+$/.test(option)) throw new Error(`--database-location takes a region name such as eastus, not ${JSON.stringify(option)}`);
-  if (option && state && option !== state) throw new Error(`the managed database is already in ${state}; a different --database-location would create a second server`);
-  return option ?? state ?? location;
+  const regions = databaseRegions(option, location);
+  if (option !== undefined && state && !regions.includes(state)) throw new Error(`the managed database is already in ${state}; a --database-location without it would create a second server`);
+  return state ?? regions[0];
 }
 
 // The Flexible Server administrator password: the app's pg-password with a capital letter added when it has none
@@ -327,4 +364,14 @@ export async function deployWithPreview({ validate, whatIf, report, run, preview
   await validate();
   report(await whatIf());
   return previewOnly ? null : run();
+}
+// The domain oidc.allowed_email_domains admits: --email-domain, else the signed-in user's mail domain, else, for an
+// account with no mail address (common in test tenants), its user principal name's domain, which Entra puts in the
+// email claim for such accounts (the Contoso install of 2026-10-17 signed in that way).
+export function emailDomainFor({ option, mail, upn }) {
+  if (option) return { domain: option, from: 'option' };
+  const domainOf = (address) => (/^[^@\s#]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})$/.exec(address ?? '') ?? [])[1];
+  if (domainOf(mail)) return { domain: domainOf(mail), from: 'mail' };
+  if (domainOf(upn)) return { domain: domainOf(upn), from: 'userPrincipalName' };
+  throw new Error('the signed-in user has no mail address or user principal name with a domain; run the installer with -EmailDomain <your email domain>');
 }

@@ -27,9 +27,9 @@ models through it. Claude Code runs the profile's credential helper through its 
   again when the token it holds has expired from 2.1.246
   ([apiKeyHelper](https://code.claude.com/docs/en/settings-reference#apikeyhelper)).
 - The gateway URL, for example `https://gateway.contoso.com`, from the gateway operator.
-- A network from which the gateway accepts connections. The test deployment's ingress and the gateway accept only
-  the address range the operator deployed with (config/gateway.azure-test.yaml:49-50); from other addresses discovery
-  returns HTTP 403.
+- A network from which the gateway accepts connections. A test deployment accepts every network unless the operator
+  limited it to one address range (config/gateway.azure-test.yaml:49-50); from outside such a range discovery returns
+  HTTP 403.
 - An account that holds one of the gateway's app roles; the operator grants it
   ([Configure models, roles and developer access](how-to-admin-configure.md#grant-developer-access)).
 - The name of a model the gateway serves for Claude Code's background tasks, when it serves no Haiku model; for the

@@ -79,6 +79,17 @@
       };
     },
 
+    // ADR-0016: GET /api/sign-in-credential as the Sign-in credential card shows it.
+    signIn(status) {
+      const modeText = status?.mode === 'certificate' ? 'Certificate (self-signed, no client secret)' : status?.mode === 'secret' ? 'Client secret' : 'Unknown';
+      const days = typeof status?.daysLeft === 'number' ? status.daysLeft : null;
+      const kind = days === null ? 'warn' : days < 0 ? 'danger' : days < (status?.renewsWithinDays ?? 30) ? 'warn' : 'ok';
+      const endsText = status?.endsAt ? `${String(status.endsAt).slice(0, 10)}${days === null ? '' : ` (${days} days)`}` : 'Not known';
+      const note = `The daily job job-signin-renewer renews it ${status?.renewsWithinDays ?? 30} days before it ends, with no sign-in interruption. Renew now does the same at once.`;
+      const run = status?.lastRun;
+      const lastRunText = run ? `Renew now: ${run.state}${run.finishedAt ? ` at ${String(run.finishedAt).slice(0, 16).replace('T', ' ')} UTC` : ' (started; a new gateway revision takes a few minutes)'}` : null;
+      return { modeText, kind, endsText, note, lastRunText };
+    },
     checklist(capabilities) {
       const items = list(capabilities?.items).map((item) => ({
         key: item.key, label: item.label, granted: item.granted === true, status: item.granted === true ? 'Granted' : 'Missing',

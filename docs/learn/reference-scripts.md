@@ -194,7 +194,12 @@ copied. Running it again after a partial run repeats only what is missing.
 | `--resource-group` | The gateway's resource group; required |
 | `--gateway-app` | The gateway Container App's name; default `ca-claude-gw` |
 | `--database-location` | Region for the server, when the app's region refuses B1ms (U-105); default the app's region |
-| `--client-secret-days` | Lifetime, 1 to 30 days, of a client secret the `app` step creates; default 7 (infra/azure-test/lib/plan.mjs:91-96) |
+| `--client-secret-days` | Lifetime, 1 to 365 days, of a client secret the `app` step creates when the gateway signs in with one; default 365 |
+| `--sign-in` | `certificate` or `secret`; absent: certificate for a new install, falling back to a secret, and the recorded choice afterwards (ADR-0016) |
+| `--credential-months` | Validity, 1 to 24 months, of a sign-in certificate the `app` step makes; default 12 |
+| `--any-address` | No IP rule on the gateway: it accepts every address and relies on Entra sign-in (ADR-0017); refused with `--tester-cidr` |
+| `--use-existing-resource-group` | Uses a resource group the installer did not create (ADR-0018) |
+| `--admin` | The admin file, read by `preflight` and `base` for the Foundry deployments and the database choice |
 | `--plan` | Prints the steps and changes nothing |
 | `--acknowledge-data-loss` | Required to run: the move empties the sidecar database once |
 
@@ -217,22 +222,22 @@ and removes rules for addresses the app no longer has; other rules are kept (ADR
 Runs the test deployment's stages in a fixed order regardless of `-Steps`' own order: `config`
 (`new-gateway-config.mjs` renders the admin file), `base`, `entra`, `image`, `app` (each a step of `deploy.mjs`; `app`
 deploys the rendering with `--config`), `budgets` (`bootstrap-budgets.mjs`), `admin-ui` (`Deploy-AdminUi.ps1`)
-(infra/azure-test/Install-ClaudeGateway.ps1:120). Requesting `app` also runs `config`, so a stale rendering is never
-deployed (infra/azure-test/Install-ClaudeGateway.ps1:136). `admin-ui` runs last because its final step, the
+(infra/azure-test/Install-ClaudeGateway.ps1:129). Requesting `app` also runs `config`, so a stale rendering is never
+deployed (infra/azure-test/Install-ClaudeGateway.ps1:146). `admin-ui` runs last because its final step, the
 Microsoft Graph grant, needs a directory role many operators do not hold (docs/UNKNOWNS.md, U-75). Before any stage
 runs, the script refuses a value holding a character cmd.exe interprets, which `Deploy-AdminUi.ps1` would pass to
-`az` (infra/azure-test/Install-ClaudeGateway.ps1:125-129), and an admin file without `deployment.adminApi: true` when
-`admin-ui`, or `budgets` with budgets declared, is requested (infra/azure-test/Install-ClaudeGateway.ps1:178-183). It
+`az` (infra/azure-test/Install-ClaudeGateway.ps1:135-139), and an admin file without `deployment.adminApi: true` when
+`admin-ui`, or `budgets` with budgets declared, is requested (infra/azure-test/Install-ClaudeGateway.ps1:190-195). It
 makes no `az`, ARM or Graph call of its own and runs every stage from the repository root; a stage that fails stops
 every later one and names the stage, the exit code and the matching section of
 [Install the Claude apps gateway, stage by stage](how-to-install-stage-by-stage.md)
-(infra/azure-test/Install-ClaudeGateway.ps1:197-205).
+(infra/azure-test/Install-ClaudeGateway.ps1:209-222).
 
 | Parameter | Meaning |
 |---|---|
 | `-ResourceGroup` | Required. The resource group every stage targets |
 | `-AdminFile` | Required. The admin file `config` renders and `budgets` and `admin-ui` read |
-| `-TesterCidr` | Required when `base`, `entra`, `image` or `app` is requested, unless the state file records a range, which a run without it uses; passed to `deploy.mjs --tester-cidr`, and the default of `-AllowedCidr` |
+| `-TesterCidr` | Optional. Limits the gateway to this range (`/24` or narrower), passed to `deploy.mjs --tester-cidr`. Without it a new install admits every address and relies on Entra sign-in with a gateway role (ADR-0017); a later run without it keeps the range the state file records |
 | `-ConfigFile` | Where `config` writes the rendering `app` deploys; default `gateway.<name>.yaml` next to `gateway-admin.<name>.json`, or `<name>.gateway.yaml` for another file name |
 | `-AppRegistrationName` | The Entra app registration's display name, given to `deploy.mjs --app-display-name` and `Deploy-AdminUi.ps1`; default `claude-apps-gateway-test` |
 | `-Location` | Passed to `deploy.mjs --location` when given |
@@ -242,14 +247,16 @@ every later one and names the stage, the exit code and the matching section of
 | `-AcrName` | The registry for admin-ui's image; default the `acrName` the `base` stage records in `deploy.mjs`'s state file |
 | `-GatewayAppName` | Forwarded to `bootstrap-budgets.mjs` and `Deploy-AdminUi.ps1`; default `ca-claude-gw` |
 | `-EnvironmentName` | Forwarded to `Deploy-AdminUi.ps1`; default `cae-claude-gw`, the environment the test template creates |
-| `-AllowedCidr` | The range admin-ui admits, forwarded to `Deploy-AdminUi.ps1`; default `-TesterCidr`, since the test topology has no virtual network |
+| `-AllowedCidr` | Optional. Limits the admin console to this range, forwarded to `Deploy-AdminUi.ps1`. Without it a new install admits every address and relies on Entra sign-in with `AdminUi.Admin` (ADR-0017). Required with `-NoSignIn`, where it defaults to `-TesterCidr` |`n| `-GatewayAllowAnyAddress` | Reopens a gateway that an earlier run limited with `-TesterCidr`; refused with `-TesterCidr` (ADR-0017) |`n| `-ConsoleAllowAnyAddress` | Reopens a console that an earlier run limited with `-AllowedCidr`; refused with `-AllowedCidr` or `-NoSignIn` (ADR-0017) |
 | `-SignInAdmins` | Required for `admin-ui` unless `-NoSignIn`: who may open the console, as user principal names separated by commas; forwarded with `-EnableSignIn` and `-Topology test` (ADR-0011) |
 | `-NoSignIn` | Deploys the console without sign-in, so anyone inside `-AllowedCidr` can use it (ADR-0008) |
-| `-DatabaseLocation` | Passed to `deploy.mjs --database-location` for `app`: the managed database's region (docs/UNKNOWNS.md, U-105) |
-| `-ClientSecretDays` | Passed to `deploy.mjs --client-secret-days` for `app`: 1 to 30 days for a new client secret; default 7 |
-| `-RotateClientSecret` | Passed to `deploy.mjs --rotate-client-secret` for `app`: a new client secret whatever the current one's end date |
-| `-Steps` | Which stages to run: `config`, `base`, `entra`, `image`, `app`, `budgets`, `admin-ui`; default all seven. A comma-separated list also works from `pwsh -File` |
-| `-Plan` | Prints every requested stage's command line and runs none of them; a registry `base` has not recorded yet shows as a placeholder |
+| `-DatabaseLocation` | Passed to `deploy.mjs --database-location` for `preflight`, `base` and `app`: the managed database's region, or a comma-separated list tried in order, such as `eastus,centralus,westus3` (ADR-0018) |`n| `-UseExistingResourceGroup` | Installs into a resource group the installer did not create; stops if the group holds a resource named like one the installer creates; teardown removes only this install's tagged resources and never the group (ADR-0018) |
+| `-SignInCredential` | `certificate` or `secret`, passed to `deploy.mjs --sign-in` for `app`. Absent: a new install uses a self-signed certificate and falls back to a client secret if the certificate cannot be made or registered; an install that uses a secret keeps it (ADR-0016) |
+| `-CredentialValidityMonths` | Validity of a new sign-in certificate, 1 to 24 months; default 12. Passed to `app` and to `admin-ui`, whose `job-signin-renewer` issues the next one |
+| `-ClientSecretDays` | Lifetime of a new client secret, 1 to 365 days; default 365. Passed to `app` and to `admin-ui` |
+| `-RotateClientSecret` | Passed to `deploy.mjs --rotate-client-secret` for `app`: a new sign-in certificate or client secret whatever the current one's end date |
+| `-Steps` | Which stages to run: `config`, `preflight`, `base`, `entra`, `image`, `app`, `budgets`, `admin-ui`; default all eight. A comma-separated list also works from `pwsh -File` |
+| `-Plan` | Runs the read-only `preflight` checks and prints every other requested stage's command line without running it; a registry `base` has not recorded yet shows as a placeholder |
 | `-ConfigScript`, `-DeployScript`, `-BudgetsScript`, `-AdminUiScript`, `-StateDir` | The four sub-scripts' paths and `deploy.mjs`'s state folder; default the real ones. Overridden only by `tests/install-orchestrator.test.mjs`, which points them at fake stand-ins |
 
 ## Deployment scripts
@@ -320,7 +327,9 @@ allowed range can use the console.
 | `-AppRegistrationName` | Required. The display name of the gateway's Entra app registration |
 | `-AdminFile` | The admin file; default `config/gateway-admin.azure-private.json` |
 | `-ImageTag` | The image tag to build; default today's date as `yyyy-MM-dd` |
-| `-AllowedCidr` | The only address range the console's ingress admits; default `10.40.0.0/16`, the VNet of the network-restricted deployment. `203.0.113.0/26` in these articles is a documentation range that admits nobody |
+| `-AllowedCidr` | The only address range the console's ingress admits; default `10.40.0.0/16`, the VNet of the network-restricted deployment. `203.0.113.0/26` in these articles is a documentation range that admits nobody |`n| `-AllowAnyAddress` | Deploys the console with no IP rule, so it relies on Entra sign-in with `AdminUi.Admin`; refused without `-EnableSignIn` (ADR-0017) |
+| `-CredentialValidityMonths` | Validity, 1 to 24 months, of a certificate `job-signin-renewer` issues for the gateway; default 12 (ADR-0016) |
+| `-ClientSecretDays` | Lifetime, 1 to 365 days, of a client secret `job-signin-renewer` issues when the gateway signs in with one; default 365 |
 | `-Topology` | `private` (default) or `test`; the console renders the configuration it saves for this topology (ADR-0010) |
 | `-EnableSignIn` | Turns on Container Apps authentication with a `<app registration>-admin-ui-signin` registration that carries the `AdminUi.Admin` role; saving the configuration, creating roles and tagging users need it |
 | `-SignInAdmins` | User principal names to assign `AdminUi.Admin`, as several values or one comma-separated value; required with `-EnableSignIn`, and checked before any Azure call |

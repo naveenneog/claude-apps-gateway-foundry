@@ -17,14 +17,17 @@ one PowerShell 7 window, and each step shows the output that means it worked. Te
 
 At the end of this tutorial:
 
-- The gateway runs on Azure Container Apps and accepts connections from one public address range
-  (docs/adr/0003-azure-test-deployment-with-restricted-ingress.md:1).
+- The gateway runs on Azure Container Apps and accepts connections from any network. Only people who sign in with
+  Microsoft Entra ID and hold a gateway role can use it (docs/adr/0017-installer-option-to-allow-any-address.md:1).
+- The gateway signs in to Entra with its own certificate, which a daily job renews; there is no client secret to renew
+  by hand (docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1).
 - Spend, spend caps and chargeback data are kept in Azure Database for PostgreSQL, with 35 days of point-in-time
   restore (docs/adr/0012-test-topology-database-choice.md:50).
 - The admin console opens only for the people named at install (docs/adr/0011-admin-ui-is-admin-only-with-sign-in.md:1).
 - Developers use Claude Code through the gateway, installed by hand on one machine or by Intune on many.
 
-This is the project's test topology: a public address limited to one range, for evaluation and pilots (ADR-0003). A
+This is the project's test topology: a public address, open to every network unless an address range is set, for
+evaluation and pilots (ADR-0003, ADR-0017). A
 gateway that has no public address and is reached over VPN or ExpressRoute, the design for production, is the subject
 of [Tutorial: deploy in a network-restricted environment](tutorial-deploy-network-restricted.md).
 
@@ -36,7 +39,7 @@ In this tutorial, you:
 - Preview and run the installer
 - Open the admin console and give developers access
 - Onboard developer machines, by hand and with Intune
-- Keep the gateway's sign-in secret current
+- Check the gateway's sign-in credential
 
 ## Before you begin
 
@@ -48,13 +51,13 @@ The install needs three Microsoft roles. One person can hold all of them, or sev
 | **Owner** on the Azure subscription | The install creates resources and gives the gateway's identity a role on the Foundry account | infra/azure-test/gateway-test.json:107-143 |
 | An Entra account that may register applications, such as **Application Administrator** | The gateway signs developers in through its own app registration | https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app |
 | **Privileged Role Administrator** or **Global Administrator**, for one step | The admin console reads users and roles through Microsoft Graph application permissions, which only these roles grant. When the installing account lacks the role, the install stops at its last stage and a person who holds it runs the commands of one step ([Run the install](#run-the-install)); in this project's installs the role was activated through Privileged Identity Management for the grant (docs/UNKNOWNS.md, U-75) | https://learn.microsoft.com/en-us/powershell/entra-powershell/grant-api-permissions-managed-identity |
-| A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:217) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
+| A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:276) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
 | A Microsoft Foundry account with Claude models deployed, in the same subscription and Entra tenant as the install, that accepts traffic from public networks, and whose endpoint subdomain is its name, as Foundry creates it | The gateway calls Claude through it with its managed identity, and names it by the account name (config/gateway.azure-test.yaml:36); the identity gets a role on that account (infra/azure-test/gateway-test.json:107-143) | https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude |
-| One public address block, `/24` or narrower, that every developer machine and the administrator's machine connect to the internet from, such as the company's internet exit | The gateway and the console accept connections from that one block only; a machine outside it gets HTTP 403 (infra/azure-test/lib/plan.mjs:43-54) | https://learn.microsoft.com/en-us/azure/container-apps/ip-restrictions |
+| Optional: an existing resource group, for example the one that holds the Foundry account | `-UseExistingResourceGroup` installs into it; without the option the installer creates its own group | docs/adr/0018-existing-resource-group-preflight-and-database-first.md:1 |
 | For Intune onboarding: the Intune **Application Manager** role, and Windows devices joined or registered to Entra ID and enrolled in Intune | Intune installs the developer apps | https://learn.microsoft.com/en-us/intune/intune-service/fundamentals/role-based-access-control |
 
 Developers sign in with an e-mail address in the same domain as the account that runs the install, for example
-`contoso.com`; the gateway admits that one domain (config/gateway.azure-test.yaml:20; infra/azure-test/deploy.mjs:156).
+`contoso.com`; the gateway admits that one domain (config/gateway.azure-test.yaml:20; infra/azure-test/deploy.mjs:213).
 When the installing account's e-mail is in another domain, such as `contoso.onmicrosoft.com`, `-EmailDomain contoso.com`
 on the install command sets the developers' domain instead.
 
@@ -131,39 +134,32 @@ $rg = 'rg-claude-gw-eval'
 $foundryRg = '<resource group of your Foundry account>'
 $foundry = '<name of your Foundry account>'
 $admins = az account show --query user.name -o tsv
-$ip = Invoke-RestMethod https://api.ipify.org
-$cidr = "$ip/32"
-"$rg $foundryRg $foundry $admins $cidr"
+$regions = 'eastus2,centralus,westus3'
+"$rg $foundryRg $foundry $admins $regions"
 ```
 
 | Variable | Value |
 |---|---|
-| `$rg` | A new resource group for the gateway. The installer creates it ([resource groups](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-portal)) |
+| `$rg` | The resource group for the gateway. The installer creates it; for a group that already exists, the install command also takes `-UseExistingResourceGroup` ([resource groups](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-portal)) |
 | `$foundryRg`, `$foundry` | The Foundry account's resource group and name, from its **Overview** page in the Azure portal |
 | `$admins` | Who may open the admin console: the signed-in account. Several people are written as `'a@contoso.com,b@contoso.com'`. A guest or personal Microsoft account prints a name that is not a user principal name of the tenant; `$admins` is then set to a member account of the tenant |
-| `$cidr` | The block the gateway and the console accept connections from. The command above sets this machine's own address as `/32`, which admits this machine only; [Choose the address range](#choose-the-address-range) decides it |
+| `$regions` | The regions to try for the managed database, in order. The installer skips a region that does not offer the database to the subscription and moves to the next when one refuses it (infra/azure-test/lib/preflight.mjs:54) |
 
-### Choose the address range
+### Choose who can reach the gateway
 
-The range is decided before the install. The two choices:
+By default the gateway and the admin console accept connections from any network, so developers connect from the office,
+from home and over a VPN alike. The gateway refuses a person who is not signed in with Microsoft Entra ID or holds no
+gateway role; the console admits only the accounts in `` (infra/azure-test/Install-ClaudeGateway.ps1:191).
 
-| Choice | `$cidr` | Developers |
-|---|---|---|
-| Company block, for an install developers use | The company's public block from the network team, for example `$cidr = '198.51.100.0/26'` | Every machine inside the block connects |
-| This machine only, to try the install first | `"$ip/32"`, as set above | None until the range is widened, as in [Widen the address range](#widen-the-address-range) |
+To accept connections from one public address block only, the install command takes `-TesterCidr <block>` for the
+gateway and `-AllowedCidr <block>` for the console, each on its own. The block is `/24` or narrower, written as its
+first address, for example `198.51.100.0/26`; the network team knows the company's block. A machine outside the block
+gets HTTP 403 with the body `RBAC: access denied`
+([IP restrictions](https://learn.microsoft.com/en-us/azure/container-apps/ip-restrictions)). The ranges in this article's
+examples, `198.51.100.0/24` and `203.0.113.0/24`, are documentation ranges
+([RFC 5737](https://www.rfc-editor.org/rfc/rfc5737)) that no machine connects from.
 
-The install records the range in `infra/azure-test/.state/<resource group>.json`. A later run of the installer without
-`-TesterCidr` uses the recorded range, and prints `tester range: recorded range <range>`
-(infra/azure-test/Install-ClaudeGateway.ps1:150-158), followed by the state file's path; a later run with
-`-TesterCidr` replaces it.
-
-A network that uses several public addresses, as many company networks do, needs its whole range from the network
-team, as a block of `/24` or narrower, written as its first address, for example `198.51.100.0/26`; the installer
-refuses a wider block and a private range (infra/azure-test/lib/plan.mjs:43-54). The ranges in this article's examples,
-`198.51.100.0/24` and `203.0.113.0/24`, are documentation ranges ([RFC 5737](https://www.rfc-editor.org/rfc/rfc5737))
-that no machine connects from. A machine outside the range gets HTTP 403 with
-the body `RBAC: access denied` ([IP restrictions](https://learn.microsoft.com/en-us/azure/container-apps/ip-restrictions)).
-
+The install records the choice in `infra/azure-test/.state/<resource group>.json`, and a later run keeps it.
 ## Find your Claude deployments in Foundry
 
 The admin file names each Claude model by its deployment name in Foundry
@@ -226,38 +222,51 @@ A mistake is reported by field, for example `models[1].deployment: ...`, and not
 
 ## Preview the install
 
-`-Plan` prints every command the installer would run and changes nothing
-(infra/azure-test/Install-ClaudeGateway.ps1:198-200, 233):
+`-Plan` runs the read-only checks of the `preflight` stage and prints every other command the installer would run; it
+changes nothing (infra/azure-test/lib/preflight.mjs:54):
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -DatabaseLocation centralus -Plan
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -DatabaseLocation $regions -Plan
 ```
 
+With a group that already exists, the command also takes `-UseExistingResourceGroup`. The checks print one line each;
+a `FAIL` line names what to change before the install:
+
+```output
+[deploy] preflight: PASS  resource group rg-claude-gw-eval: does not exist; the base stage creates it in eastus2
+[deploy] preflight: PASS  Foundry account ai-contoso: holds claude-sonnet-5, claude-opus-5
+[deploy] preflight: WARN  database region eastus2: Burstable Standard_B1ms is not offered; skipped
+[deploy] preflight: PASS  database region centralus: PostgreSQL 16, Burstable Standard_B1ms offered
+[deploy] preflight: passed; nothing was changed
+```n
 The output ends with:
 
 ```output
 == admin-ui ==
-  pwsh -NoProfile -File <repository>\infra\azure-test\..\..\admin-ui\infra\Deploy-AdminUi.ps1 -ResourceGroup rg-claude-gw-eval -EnvironmentName cae-claude-gw -GatewayAppName ca-claude-gw -AcrName <acrName the base stage records> -AppRegistrationName claude-apps-gateway-eval -AdminFile config\gateway-admin.azure-eval.json -AllowedCidr 198.51.100.7/32 -Topology test -EnableSignIn -SignInAdmins admin@contoso.com
-=== plan: 7 stage(s) would run ===
+  pwsh -NoProfile -File <repository>\infra\azure-test\..\..\admin-ui\infra\Deploy-AdminUi.ps1 -ResourceGroup rg-claude-gw-eval -EnvironmentName cae-claude-gw -GatewayAppName ca-claude-gw -AcrName <acrName the base stage records> -AppRegistrationName claude-apps-gateway-eval -AdminFile config\gateway-admin.azure-eval.json -AllowedCidr 0.0.0.0/0 -Topology test -EnableSignIn -SignInAdmins admin@contoso.com -AllowAnyAddress
+=== plan: 8 stage(s) would run ===
 ```
 
 ## Run the install
 
-The same command without `-Plan`. `-DatabaseLocation centralus` places the managed database in Central US, because East US 2 refused its size in this
-project's installs (docs/UNKNOWNS.md, U-105); without it the database is in the gateway's region. `-ClientSecretDays 30`
-gives the gateway's sign-in secret 30 days, the most the
-installer allows; [Keep the gateway's sign-in secret current](#keep-the-gateways-sign-in-secret-current) renews it:
+The same command without `-Plan`. The `base` stage creates the managed database first, in the first region of
+`$regions` that accepts it, so a refused region shows in the first minutes (docs/UNKNOWNS.md, U-105 and U-135). The
+`app` stage gives the gateway a self-signed sign-in certificate valid for 12 months; `-CredentialValidityMonths` sets 1
+to 24 ([Check the gateway's sign-in credential](#check-the-gateways-sign-in-credential)):
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr $cidr -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -DatabaseLocation centralus
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -DatabaseLocation $regions
 ```
 
-The installer runs seven stages in order and prints `== <stage> ==` as each starts
-(infra/azure-test/Install-ClaudeGateway.ps1:198). On 2026-10-21 the first six took about eight minutes
-(docs/TEST-PLAN.md, T-91); creating the managed database adds several minutes. A finished install ends with the two
+The installer runs eight stages in order and prints `== <stage> ==` as each starts
+(infra/azure-test/Install-ClaudeGateway.ps1:210). On 2026-10-21 the first six took about eight minutes
+(docs/TEST-PLAN.md, T-91); creating the managed database adds several minutes. On 2026-11-03 an install into an existing
+group, with the database falling back from East US to Central US, took about 25 minutes (docs/TEST-PLAN.md, T-161). A finished install ends with the two
 addresses to keep, and the console identity's object ID, which the Microsoft Graph grant below needs:
 
 ```output
+[deploy] registered sign-in certificate <thumbprint>; it ends <date>
+...
 [deploy] gateway: https://ca-claude-gw.<environment>.eastus2.azurecontainerapps.io
 ...
   admin-ui: https://ca-admin-ui.<environment>.eastus2.azurecontainerapps.io
@@ -267,32 +276,36 @@ addresses to keep, and the console identity's object ID, which the Microsoft Gra
 === install complete ===
 ```
 
-The install writes `infra/azure-test/.state/<resource group>.json`, which git does not track (.gitignore:7). Renewing
-the sign-in secret, widening the range and clean-up read it, so they run in this repository folder on this machine, and
+The install writes `infra/azure-test/.state/<resource group>.json`, which git does not track (.gitignore:7). Changing
+the address range, updating the release and clean-up read it, so they run in this repository folder on this machine, and
 a copy of the file kept with the deployment's records, placed in the same folder of another clone together with the
 admin file `config/gateway-admin.azure-eval.json`, which git does not track either, lets another machine
 run them. The gateway is deployed to East
-US 2 unless the install command has `-Location <region>` (infra/azure-test/deploy.mjs:53).
+US 2 unless the install command has `-Location <region>` (infra/azure-test/deploy.mjs:57).
 
 When a stage stops, the installer names it and the section of
 [Install the Claude apps gateway, stage by stage](how-to-install-stage-by-stage.md) that does it by hand
-(infra/azure-test/Install-ClaudeGateway.ps1:203). The stops seen in this project's installs:
+(infra/azure-test/Install-ClaudeGateway.ps1:218). The stops seen in this project's installs:
 
 | Stop | Cause | What fixes it |
 |---|---|---|
 | `admin-ui` stops with `Authorization_RequestDenied` | The account lacks Privileged Role Administrator for the Microsoft Graph grant (docs/UNKNOWNS.md, U-75) | 1. A Privileged Role Administrator, with the role active (in Privileged Identity Management when the tenant uses it), opens Azure Cloud Shell in **PowerShell** and runs [the Cloud Shell commands of the admin-ui stage](how-to-install-stage-by-stage.md#admin-ui), which give the console's identity its four permissions. When Cloud Shell is not available to that person, the same commands run in PowerShell 7 on any machine with the Azure CLI after `az login --allow-no-subscriptions`. 2. The installing account runs the install command again without `-TesterCidr` and with `-Steps admin-ui`: it reports `already granted` for the four, makes the console an owner of the gateway's app registration, which the **Roles** page needs, and deploys the console again (`admin-ui/infra/Deploy-AdminUi.ps1`, lines 240-265). When the **Developers** page still reports a missing permission, `az containerapp revision restart -n ca-admin-ui -g $rg --revision <revision>`, with the name from `az containerapp revision list -n ca-admin-ui -g $rg -o table`, starts it with a new Microsoft Graph token (admin-ui/server/managed-identity.mjs:12-16) |
-| `app` stops with `SkuNotAvailable` | The region does not offer the database size to this subscription; in this project every East US 2 attempt on 2026-10-25 was refused, so `-DatabaseLocation centralus` on the first install avoids it (docs/UNKNOWNS.md, U-105) | The same install command with `-DatabaseLocation` set to another region and `-Steps app,budgets,admin-ui`; the console has not saved yet at this point |
+| `preflight` prints `FAIL  database: no region in ... offers Burstable Standard_B1ms` | None of the regions in `$regions` offers the database to this subscription. In this project's Contoso subscription East US answered `restricted` and East US 2 refused at creation time (docs/UNKNOWNS.md, U-105 and U-135) | `$regions` set to more regions, for example `'centralus,westus3,northcentralus'`, then the same install command. `base` also moves to the next region on its own when a region passes the check and still refuses the server |
+| `preflight` prints `FAIL  resource group ...: the resource group exists and was not created by this tool` | `$rg` names a group that already exists | The same install command with `-UseExistingResourceGroup`. The installer adds its resources next to what is there and never deletes the group (docs/adr/0018-existing-resource-group-preflight-and-database-first.md:1) |
+| `preflight` prints `FAIL  Foundry account ...: no deployment named ...` | The admin file names a deployment the Foundry account does not hold | `models[].deployment` in the admin file set to a name from [Find your Claude deployments in Foundry](#find-your-claude-deployments-in-foundry) |
 | `app` stops with `deployments/claude-gw-app returned 503` | Azure Resource Manager answered the status check with a temporary error; the deployment itself was submitted and keeps running. The installer now retries such answers (docs/UNKNOWNS.md, U-129), so a copy from before 2026-11-03 shows it | `az deployment group show -g $rg -n claude-gw-app --query properties.provisioningState -o tsv` until it prints `Succeeded` or `Failed`, then the same install command with `-Steps app,budgets,admin-ui`. With `Failed`, `az deployment operation group list -g $rg -n claude-gw-app --query "[?properties.provisioningState=='Failed'].properties.statusMessage" -o json` names the cause |
-| `the gateway is ready, but this machine gets 403 for ...` | This machine's public address left `$cidr` (docs/UNKNOWNS.md, U-33) | With the company block, this machine connects from inside it (on the company network or VPN), then the install command without `-TesterCidr` and with `-Steps app,budgets,admin-ui`. With this machine only, `$ip` and `$cidr` set again, then the same install command with `-Steps app,budgets,admin-ui`. The stop came before `budgets` and `admin-ui` ran, so the command runs them too. The message also names a `deploy.mjs` command; the install command does the same with the Foundry values (infra/azure-test/deploy.mjs:322-333) |
-| `app` stops when it adds the client secret, with a Microsoft Graph error about the credential's lifetime | The tenant's app management policy allows client secrets shorter than 30 days (docs/UNKNOWNS.md, U-1) | The same install command with `-ClientSecretDays` at or under the tenant's limit, and renewals at that interval |
-| `the signed-in user has no mail address; pass --email-domain` | The installing account has no e-mail address in Entra ID, as in many trial tenants (infra/azure-test/deploy.mjs:157) | When developers have e-mail addresses, the same install command with `-EmailDomain` set to their domain, for example `-EmailDomain contoso.com`. When they do not either, as in many trial tenants, also `"emailClaim": "preferred_username"` under `deployment` in the admin file, so the gateway reads the sign-in name (docs/UNKNOWNS.md, U-81), with `-EmailDomain` set to the sign-in names' domain, for example `contoso.onmicrosoft.com` |
+| `the gateway is ready, but this machine gets 403 for ...` | The install was limited with `-TesterCidr`, and this machine's public address is outside that block (docs/UNKNOWNS.md, U-33) | This machine connects from inside the block (on the company network or VPN), then the same install command with `-Steps app,budgets,admin-ui`. Without `-TesterCidr` the gateway accepts every address and this stop does not occur |
+| `certificate sign-in did not work (...); falling back to a client secret` | The tenant refused a certificate on the app registration, for example by an app management policy (docs/UNKNOWNS.md, U-133). The install continues with a client secret of `-ClientSecretDays` days, 365 by default | Nothing for the install. To sign in with a certificate later, the tenant's policy is changed and the install command runs with `-SignInCredential certificate -Steps app` |
+| `Entra refused a client secret of 365 days` | The tenant's app management policy caps client secret lifetimes | The same install command with `-ClientSecretDays` at or under the tenant's limit, for example `-ClientSecretDays 30`; the renewal job renews it 30 days before it ends |
+| `the app registration holds certificate(s) ... not made by the installer` | Someone added a certificate to the gateway's app registration by hand. Microsoft Graph replaces all of an application's certificates at once, so the installer stops rather than remove it (infra/azure-test/lib/signin.mjs) | The certificate removed under **App registrations** > the gateway's registration > **Certificates & secrets**, then the same install command with `-Steps app` |
+| `the signed-in user has no mail address; the gateway admits email domain ...` | The installing account has no e-mail address in Entra ID, as in many trial tenants, so the installer takes the domain of the sign-in name (infra/azure-test/lib/plan.mjs:371) | Nothing when developers sign in with names in that domain. When their e-mail addresses are in another domain, the same install command with `-EmailDomain` set to it, for example `-EmailDomain contoso.com`. When developers have no e-mail address either, also `"emailClaim": "preferred_username"` under `deployment` in the admin file (docs/UNKNOWNS.md, U-81) |
 
 Every stage can run again: a stage that already ran finds its resources and changes only what differs
 (docs/adr/0009-a-staged-installer-over-the-existing-deploy-scripts.md:1). After the admin console has saved the
 gateway's configuration, the `app` stage keeps the console's configuration and prints `the admin console saved this
-gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:343-345); models,
+gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:327-329); models,
 roles and policies are then changed in the console. A later run names its stages with `-Steps`, such as `-Steps app` or
-`-Steps admin-ui`, and leaves out `-TesterCidr` unless the range changes: the `budgets` stage sets the spend caps from
+`-Steps admin-ui`, and keeps the recorded address choice unless `-TesterCidr` or `-AllowedCidr` changes it: the `budgets` stage sets the spend caps from
 the admin file again, replacing caps changed in the console
 ([install stage by stage](how-to-install-stage-by-stage.md#budgets)), and the admin file on disk does not hold
 roles or models added in the console.
@@ -307,18 +320,18 @@ docs/adr/0011-admin-ui-is-admin-only-with-sign-in.md:1). Its pages are described
 
 | What appears | Meaning |
 |---|---|
-| `RBAC: access denied` | This machine's address is outside `$cidr` ([troubleshoot](troubleshoot.md)) |
+| `RBAC: access denied` | The console was limited with `-AllowedCidr`, and this machine's address is outside that block ([troubleshoot](troubleshoot.md)) |
 | `AADSTS50105` from Microsoft sign-in | The account has no assignment on the console's sign-in application, `claude-apps-gateway-eval-admin-ui-signin`; the install command without `-TesterCidr`, with that account added to `-SignInAdmins` and with `-Steps admin-ui`, assigns it; before the Microsoft Graph grant is in place the run stops at the grant, after the assignment ([troubleshoot](troubleshoot.md#gateway-and-admin-console)) |
 | **AdminUi.Admin is required** | The account is assigned to the sign-in application without the `AdminUi.Admin` role; the same command assigns the role |
 | **Need admin approval** | The tenant stops user consent; an Application Administrator grants it as in [Give developers access](#give-developers-access) |
 
-The installing account already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:193), so the gateway can be
+The installing account already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:250), so the gateway can be
 checked end to end before any developer is onboarded: [Onboard developers](#onboard-developers), the `new-client-policy.mjs` command and
 [One machine](#one-machine), on this machine when it runs Windows, then [Check that it works](#check-that-it-works).
 
 ## Give developers access
 
-The account that ran the install already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:193). On the console's
+The account that ran the install already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:250). On the console's
 **Developers** page, a user principal name and a role, `Gateway.Standard` or `Gateway.Premium`, then
 **Grant role** gives a developer access (docs/learn/how-to-use-admin-console.md:59). The role decides the models and
 whether Claude Desktop is available, as the admin file's `policies` set them. For a group of developers, the
@@ -388,8 +401,7 @@ steps use.
 ### One machine
 
 The administrator gives the developer the `client-policy\developer` folder, for example as a zip file on a file share;
-it holds the scripts and `START-HERE.txt`, the same steps in plain text. The developer needs a network inside `$cidr`
-and Claude Code: `winget install Anthropic.ClaudeCode` installs it, after which a new Windows PowerShell window finds
+it holds the scripts and `START-HERE.txt`, the same steps in plain text. The developer needs Claude Code, and, when the install set `-TesterCidr`, a network inside that block: `winget install Anthropic.ClaudeCode` installs it, after which a new Windows PowerShell window finds
 the `claude` command ([set up Claude Code](https://code.claude.com/docs/en/setup)). In Windows PowerShell, in the
 folder:
 
@@ -602,7 +614,7 @@ answered in 3.7 to 4.0 seconds (docs/TEST-PLAN.md, T-116).
 
 ## Run the installer again later
 
-A later run, such as widening the range or renewing the sign-in secret, happens in a new PowerShell 7 window in the
+A later run, such as limiting the address range or updating the gateway's release, happens in a new PowerShell 7 window in the
 repository folder that holds the state file, so it signs in and sets the values again first:
 
 ```powershell
@@ -615,49 +627,47 @@ $admins = az account show --query user.name -o tsv
 ```
 
 The run needs the account that installed, which owns the gateway's app registration, or an Application Administrator,
-because the `app` stage adds and removes the registration's client secrets
+because the `app` stage adds and removes the registration's certificates and client secrets
 ([Application Administrator](https://learn.microsoft.com/en-us/entra/identity/role-based-access-control/permissions-reference#application-administrator)).
 
-### Widen the address range
+### Limit or change the address range
 
-The install command with the company block replaces the range on the gateway and the console
-(infra/azure-test/Install-ClaudeGateway.ps1:150-159):
-
-```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr 198.51.100.0/26 -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -ClientSecretDays 30 -Steps app,admin-ui
-```
-
-`198.51.100.0/26` is a documentation range; the command takes the company block. `-SignInAdmins $admins` also makes the
-account that runs it a console administrator, if it is not one already. The stage then checks the gateway from
-this machine, so it runs from inside the new range. Before the Microsoft Graph grant is in place, the `admin-ui` stage
-stops at the grant after the console's range is set, as in the install; the range change has applied by then.
-
-## Keep the gateway's sign-in secret current
-
-The values come from [Run the installer again later](#run-the-installer-again-later).
-
-The gateway signs developers in with a client secret of its app registration, which ends `-ClientSecretDays` days after
-it is created, 7 when the option is absent (infra/azure-test/lib/plan.mjs:92-93; infra/azure-test/deploy.mjs:278). Running the `app` stage again keeps a
-secret with more than a day left (infra/azure-test/lib/plan.mjs:256-265); `-RotateClientSecret` creates a new one
-whatever the end date. Existing sessions stay valid, because the session key is reused
-(docs/adr/0003-azure-test-deployment-with-restricted-ingress.md:89-91). With 30-day secrets, this command every three
-weeks, run in the folder that holds the state file, keeps sign-in working. It leaves out `-TesterCidr`, so the
-recorded range stays. A reminder in a calendar keeps the interval; a scheduled task would need its own non-interactive Azure CLI sign-in:
+The install command with `-TesterCidr` limits the gateway, and with `-AllowedCidr` the console, to one block; a later run
+with another block replaces it, and `-GatewayAllowAnyAddress` or `-ConsoleAllowAnyAddress` opens the app to every
+address again (docs/adr/0017-installer-option-to-allow-any-address.md:1):
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -ClientSecretDays 30 -RotateClientSecret -Steps app
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -TesterCidr 198.51.100.0/26 -AllowedCidr 198.51.100.0/26 -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -Steps app,admin-ui
 ```
 
-The output includes `added client secret <id>; it ends <date>`. On the managed database, a gateway whose outbound
-address changed answers `/readyz` with 503 until `node scripts/admin/sync-database-firewall.mjs --resource-group $rg`
-runs ([troubleshoot](troubleshoot.md#gateway-and-admin-console)). The secret's end date is also under **App
-registrations** > `claude-apps-gateway-eval` > **Certificates & secrets** in the Microsoft Entra admin center. After it
-ends, sign-in fails and Entra reports `AADSTS7000222`, an expired client secret
-([Microsoft Entra error codes](https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes)); the
-same command restores it.
+`198.51.100.0/26` is a documentation range; the command takes the company block. The `app` stage then checks the
+gateway from this machine, so it runs from inside the block. Before the Microsoft Graph grant is in place, the
+`admin-ui` stage stops at the grant after the console's range is set, as in the install; the range change has applied
+by then.
 
-The stage ends by checking the gateway from this machine, so it runs from inside the range. From outside, it ends with
-`the gateway is ready, but this machine gets 403`; the secret is renewed by then, and the range stays as it is.
+## Check the gateway's sign-in credential
+
+The gateway signs developers in through its app registration, and proves to Microsoft Entra ID that it is that
+application with a self-signed certificate the `app` stage made (infra/azure-test/lib/credentials.mjs:67). The
+certificate is valid for `-CredentialValidityMonths`, 12 months by default. Nobody renews it by hand:
+
+- The console's job `job-signin-renewer` runs every day at 03:17 UTC and replaces the certificate 30 days before it
+  ends. It registers the new certificate next to the old one, starts a gateway revision that uses the new one, and
+  removes the old one once that revision is ready, so signed-in developers stay signed in
+  (admin-ui/server/signin-renewer.mjs:23;
+  [rotate the client certificate](https://code.claude.com/docs/en/claude-apps-gateway-config#rotate-the-client-certificate)).
+- **Settings** > **Gateway sign-in credential** in the console shows the type, the certificate's thumbprint and its end
+  date. **Renew now** replaces it at once, with a validity chosen from 1 to 24 months.
+- A run of the `app` stage also replaces a certificate within 30 days of its end; `-RotateClientSecret` replaces it
+  whatever its end date.
+
+The certificate's thumbprint and end date are also under **App registrations** > `claude-apps-gateway-eval` >
+**Certificates & secrets** in the Microsoft Entra admin center, and the gateway's log has a line
+`oidc: client authentication private_key_jwt; certificate CN=claude-gateway <resource group>, SHA-1 thumbprint <thumbprint>`.
+
+When the tenant refuses a certificate, the install uses a client secret of `-ClientSecretDays` days, 365 by default, and
+the same job renews it 30 days before it ends (docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1). The
+job runs with the console's identity, so it works once the Microsoft Graph grant of the `admin-ui` stage is in place.
 
 ## Update the gateway's Claude Code release
 
@@ -667,12 +677,12 @@ The Dockerfile is a tracked file; the build reads the edited file without a comm
 local change.
 A newer release is set there, with its Linux checksum from the manifest,
 `(Invoke-RestMethod "https://downloads.claude.ai/claude-code-releases/$version/manifest.json").platforms.'linux-x64'.checksum`, and the
-install command with `-Steps image,app`, without `-TesterCidr`, builds and deploys it
+install command with `-Steps image,app` builds and deploys it
 ([Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway)), with the values from
 [Run the installer again later](#run-the-installer-again-later):
 
 ```powershell
-pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -ClientSecretDays 30 -Steps image,app
+pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -Steps image,app
 ```
 
  The gateway's live output is on the Container App
@@ -688,7 +698,7 @@ ContainerAppConsoleLogs_CL
 | take 50
 ```
 
-The deployment sets up no alerts; an alert on these logs or on the secret's end date is created separately in Azure
+The deployment sets up no alerts; an alert on these logs or on a failed `job-signin-renewer` run is created separately in Azure
 Monitor ([log search alerts](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-create-log-alert-rule)).
 The console's **Dashboard** shows spend, and [troubleshoot](troubleshoot.md#gateway-and-admin-console) lists the
 gateway's messages.
@@ -700,8 +710,10 @@ gateway still answers the profile's sign-out, and the apps are deleted under **A
 report it, App 2 before App 1, which it depends on;
 then the developer group is deleted under **Groups** in the Microsoft Entra admin center.
 
-The teardown script removes the gateway's role on the Foundry account, its app registration and the resource group;
-`--dry-run` lists them first (infra/azure-test/teardown.mjs:1-4). It reads the record the install wrote in
+The teardown script removes the gateway's role on the Foundry account, its app registration and the resource group. In a
+group that the install did not create (`-UseExistingResourceGroup`), it removes only the resources tagged with the
+install's `runId` and keeps the group and everything else in it;
+`--dry-run` lists them first (infra/azure-test/teardown.mjs:1-5). It reads the record the install wrote in
 `infra/azure-test/.state/`, so it runs on the machine and in the folder that ran the install:
 
 ```powershell

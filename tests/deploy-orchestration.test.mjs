@@ -23,7 +23,7 @@ function harness({ whatIf = false, run } = {}) {
   const io = {
     validateDeployment: async () => { calls.push('validate'); },
     whatIfDeployment: async () => { calls.push('whatIf'); return []; },
-    runDeployment: async () => { calls.push('run'); return run(); },
+    runDeployment: async (groupPath, name, body) => { calls.push('run'); io.last = { name, body: JSON.parse(body) }; return run(); },
     save: (c) => { calls.push('save'); saves.push(structuredClone(c.state)); },
   };
   return { ctx, io, calls, saves };
@@ -84,4 +84,18 @@ test('P-39 deployTemplate deploys the admin-ui secret and stamp only when the ap
     assert.equal(app.properties.template.containers.find((c) => c.name === 'gateway').env.some((e) => e.name === 'CONFIG_UPDATED_AT'), expected);
     assert.equal(bodies[0].properties.parameters.gatewayAdminFile?.value, parameters.gatewayAdminFile);
   }
+});
+
+test('T-159 deployTemplate with databaseFirst deploys only the PostgreSQL resources as claude-gw-db, and returns the server name', async () => {
+  const { ctx, io, calls } = harness({ run: () => deployed({ pgServerName: 'psql-claude-gw-abcd1234-centralus' }) });
+  const out = await deployTemplate(ctx, { databaseFirst: true, database: 'managed', databaseLocation: 'centralus', postgresPassword: 'Secret-1' }, io);
+  assert.equal(out.pgServerName, 'psql-claude-gw-abcd1234-centralus');
+  assert.equal(io.last.name, 'claude-gw-db');
+  const { template, parameters } = io.last.body.properties;
+  assert.deepEqual(template.resources.map((r) => r.type), ['Microsoft.DBforPostgreSQL/flexibleServers', 'Microsoft.DBforPostgreSQL/flexibleServers/databases']);
+  assert.deepEqual(Object.keys(template.outputs), ['pgServerName']);
+  assert.equal(parameters.databaseFirst, undefined, 'not a template parameter');
+  assert.equal(parameters.databaseLocation.value, 'centralus');
+  assert.equal(ctx.state.acrName, undefined, 'the base outputs are not expected from this deployment');
+  assert.deepEqual(calls, ['validate', 'whatIf', 'save', 'run']);
 });

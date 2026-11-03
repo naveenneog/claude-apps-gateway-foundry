@@ -57,6 +57,16 @@
     The topology the gateway's configuration was rendered for: private (default) or test. admin-ui renders the
     configuration it saves with the same value (ADR-0010).
 
+.PARAMETER CredentialValidityMonths
+    Validity, 1 to 24 months, of a sign-in certificate job-signin-renewer issues for the gateway (ADR-0016). Default 12.
+
+.PARAMETER ClientSecretDays
+    Lifetime, 1 to 365 days, of a client secret job-signin-renewer issues when the gateway signs in with one. Default 365.
+
+.PARAMETER AllowAnyAddress
+    Deploys the console with no IP rule (ADR-0017), so it is reached from any address and relies on Entra sign-in with the
+    AdminUi.Admin role. Refused without -EnableSignIn.
+
 .PARAMETER EnableSignIn
     Turns on Container Apps authentication for admin-ui with its own app registration ("<app>-signin", created if
     missing) carrying the AdminUi.Admin app role. Saving the configuration, creating roles and tagging users need it.
@@ -79,11 +89,15 @@ param(
     [string]$ImageTag = (Get-Date -Format 'yyyy-MM-dd'),
     [string]$AllowedCidr = '10.40.0.0/16',
     [ValidateSet('test', 'private')][string]$Topology = 'private',
+    [switch]$AllowAnyAddress,
+    [ValidateRange(1, 24)][int]$CredentialValidityMonths = 12,
+    [ValidateRange(1, 365)][int]$ClientSecretDays = 365,
     [switch]$EnableSignIn,
     [string[]]$SignInAdmins = @(),
     [switch]$Plan
 )
 $ErrorActionPreference = 'Stop'
+if ($AllowAnyAddress -and -not $EnableSignIn) { throw '-AllowAnyAddress needs -EnableSignIn: without sign-in the console would be open to every address with no check; nothing was run.' }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $AdminAppName = 'ca-admin-ui'
 $GRAPH_SP_APP_ID = '00000003-0000-0000-c000-000000000000' # Microsoft Graph's own appId: universal, not tenant-specific.
@@ -132,7 +146,7 @@ Step 'Build image' {
     if (-not $script:imageDigest) { throw "Could not read the digest just pushed for admin-ui:$ImageTag." }
 }
 
-$gatewaySpId = $null; $gatewayAppObjectId = $null; $appId = $null; $appRolesJson = $null; $adminWriteKey = $null; $adminFileJson = $null; $graphSpId = $null
+$gatewaySpId = $null; $gatewayTags = @{}; $gatewayAppObjectId = $null; $appId = $null; $appRolesJson = $null; $adminWriteKey = $null; $adminFileJson = $null; $graphSpId = $null
 Step 'Read gateway context' {
     Import-Module (Join-Path $PSScriptRoot 'AppLookup.psm1'); $script:appId = Select-AppIdByName -Apps (az ad app list --display-name $AppRegistrationName -o json | ConvertFrom-Json) -Name $AppRegistrationName
     if (-not $script:appId) { throw "No Entra app registration named $AppRegistrationName." }
@@ -144,6 +158,9 @@ Step 'Read gateway context' {
     if (-not $script:adminWriteKey) { throw "The gateway's admin-write-key secret was not found - deployment.adminApi must be true and the app step must have run (infra/azure-private/Deploy-Gateway.ps1 -Step app)." }
     $script:adminFileJson = [IO.File]::ReadAllText((Join-Path $root $AdminFile))
     $script:graphSpId = (az ad sp show --id $GRAPH_SP_APP_ID --query id -o tsv)
+    # ADR-0018: the console's resources get the gateway app's purpose and runId tags (main.bicep ownTags).
+    $tagsJson = az containerapp show -g $ResourceGroup -n $GatewayAppName --query tags -o json
+    if ($LASTEXITCODE -eq 0 -and $tagsJson) { $parsed = ($tagsJson | Out-String | ConvertFrom-Json -AsHashtable); if ($parsed) { $script:gatewayTags = $parsed } }
     Write-Host "  gateway service principal: $($script:gatewaySpId)"
 }
 
@@ -215,11 +232,16 @@ Step 'Deploy Bicep' {
             gatewayAdminFileJson      = @{ value = $adminFileJson }
             gatewayAdminWriteKey      = @{ value = $adminWriteKey }
             allowedCidr               = @{ value = $AllowedCidr }
+            allowAnyAddress           = @{ value = [bool]$AllowAnyAddress }
             gatewayAppName            = @{ value = $GatewayAppName }
             gatewayTopology           = @{ value = $Topology }
             gatewayAdminFilePath      = @{ value = ($AdminFile -replace '\\', '/') }
             enableSignIn              = @{ value = [bool]$EnableSignIn }
             signInClientId            = @{ value = $signInClientId }
+            ownTags                   = @{ value = $gatewayTags }
+            gatewayApplicationObjectId = @{ value = $gatewayAppObjectId }
+            signInCertificateMonths   = @{ value = $CredentialValidityMonths }
+            signInSecretDays          = @{ value = $ClientSecretDays }
         }
     } | ConvertTo-Json -Depth 10 | Set-Content -Path $paramFile -Encoding utf8
     $result = az deployment group create -g $ResourceGroup --template-file (Join-Path $root 'admin-ui\infra\main.bicep') --parameters "@$paramFile" -o json | ConvertFrom-Json

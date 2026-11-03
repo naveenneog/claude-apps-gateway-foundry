@@ -21,7 +21,7 @@ Each article lists its own prerequisites; docs/learn/toc.yml:1 lists every artic
 
 | Reader | Goal | Articles, in order |
 |---|---|---|
-| Azure administrator, first install | A gateway reachable from one public address range, in one resource group, with developers onboarded by hand or with Intune | [Tutorial: install the gateway and onboard developers](tutorial-first-install.md), then [Use the admin console](how-to-use-admin-console.md) |
+| Azure administrator, first install | A gateway reachable from any network for signed-in developers, or from one address range, in a new or an existing resource group, with developers onboarded by hand or with Intune | [Tutorial: install the gateway and onboard developers](tutorial-first-install.md), then [Use the admin console](how-to-use-admin-console.md) |
 | Azure administrator, a stage stopped | Doing one install stage by hand | [Install the Claude apps gateway, stage by stage](how-to-install-stage-by-stage.md) |
 | Azure administrator, production pilot | A gateway with no public endpoint, reached over VPN or ExpressRoute | [Tutorial: deploy in a network-restricted environment](tutorial-deploy-network-restricted.md), then [Connect clients](how-to-connect-clients.md) |
 | Administrator of a running gateway | Spend caps, developer access, models and chargeback | [Use the admin console](how-to-use-admin-console.md) |
@@ -47,7 +47,7 @@ The scripts call the Azure administrator the "operator". The Entra roles are Mic
 
 ```text
 Claude Code (developer machine)
-  --> Claude apps gateway (Azure Container Apps, ingress limited to one address range)
+  --> Claude apps gateway (Azure Container Apps, Entra sign-in; ingress open or limited to one address range)
         --> Microsoft Foundry (claude-opus-5, claude-sonnet-5), called with the gateway's managed identity
 ```
 

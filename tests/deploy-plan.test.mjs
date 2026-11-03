@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   addressInside, assertTesterCidr, buildApplication, cidrContains, configVariables, coveringCidr, deployWithPreview, deploymentBody,
-  foundryAccountIds, keyPlan, newSecret, promotionError, redact, redirectUriFor, secretDays, secretEndDate, supersededKeys, unmanagedAppSettings,
+  foundryAccountIds, keyPlan, newSecret, credentialMonths, emailDomainFor, promotionError, redact, redirectUriFor, secretDays, secretEndDate, supersededKeys, unmanagedAppSettings,
   unsetConfigVariables, whatIfLines, withFoundryTarget, databaseOf, templateForDatabase, templateForConsole, consoleConfig, databasePassword, firewallPlan, databaseLocationFor,
 } from '../infra/azure-test/lib/plan.mjs';
 
@@ -85,11 +85,16 @@ test('secret end date is 7 days out by default and never beyond the tenant limit
   assert.throws(() => secretEndDate(now, 0), /1 to 30/);
 });
 
-test('P-39 --client-secret-days is a whole number of days from 1 to 30, 7 when absent', () => {
-  assert.equal(secretDays(undefined), 7);
+test('P-39 T-152 --client-secret-days is a whole number of days from 1 to 365, 365 when absent; --credential-months 1 to 24, 12 when absent', () => {
+  // ADR-0016 (amended 2026-11-03): up to a year, renewed by the job 30 days before the end.
+  assert.equal(secretDays(undefined), 365);
   assert.equal(secretDays('30'), 30);
+  assert.equal(secretDays('365'), 365);
   assert.equal(secretDays('1'), 1);
-  for (const bad of ['0', '31', '7.5', 'seven', '', ' 7', '1e1']) assert.throws(() => secretDays(bad), /1 to 30/, bad);
+  for (const bad of ['0', '366', '7.5', 'seven', '', ' 7', '1e1']) assert.throws(() => secretDays(bad), /1 to 365/, bad);
+  assert.equal(credentialMonths(undefined), 12);
+  assert.equal(credentialMonths('24'), 24);
+  for (const bad of ['0', '25', '6.5', 'x']) assert.throws(() => credentialMonths(bad), /1 to 24/, bad);
 });
 
 test('newSecret draws at least 32 random bytes and encodes them as hex', () => {
@@ -367,4 +372,21 @@ test('T-114 firewallPlan adds a rule per outbound address and removes only stale
   assert.throws(() => firewallPlan([], []), /no outbound address/);
   assert.throws(() => firewallPlan([], ['10.0.0.300']), /not an IPv4 address/);
   assert.throws(() => firewallPlan([], ['0.0.0.0']), /0\.0\.0\.0/, 'never the allow-all-Azure rule');
+});
+
+// T-157 (ADR-0017): the gateway's ingress range. -GatewayAllowAnyAddress is 0.0.0.0/0, which assertTesterCidr refuses.
+test('T-157 ingressRange: any address gives 0.0.0.0/0; a range is checked as before; both or neither are refused', async () => {
+  const { ingressRange } = await import('../infra/azure-test/lib/plan.mjs');
+  assert.equal(ingressRange({ anyAddress: true }), '0.0.0.0/0');
+  assert.equal(ingressRange({ testerCidr: '198.51.100.0/26' }), '198.51.100.0/26');
+  assert.throws(() => ingressRange({ testerCidr: '0.0.0.0/0' }), /too wide/, 'the wide range still needs the explicit option');
+  assert.throws(() => ingressRange({ anyAddress: true, testerCidr: '198.51.100.0/26' }), /either/);
+  assert.throws(() => ingressRange({}), /--tester-cidr <range> or --any-address/);
+});
+
+test('emailDomainFor: --email-domain, else the mail address\'s domain, else the sign-in name\'s, said so; neither refuses', () => {
+  assert.deepEqual(emailDomainFor({ option: 'contoso.example', mail: 'dev@fabrikam.example', upn: 'dev@contoso.example' }), { domain: 'contoso.example', from: 'option' });
+  assert.deepEqual(emailDomainFor({ mail: 'dev@fabrikam.example', upn: 'dev@contoso.example' }), { domain: 'fabrikam.example', from: 'mail' });
+  assert.deepEqual(emailDomainFor({ mail: null, upn: 'admin@contoso.example' }), { domain: 'contoso.example', from: 'userPrincipalName' });
+  assert.throws(() => emailDomainFor({ mail: null, upn: 'x#EXT#' }), /-EmailDomain/);
 });

@@ -49,6 +49,9 @@ param location string = resourceGroup().location
 @description('CIDR this admin-ui is reachable from, matching the gateway\'s own restriction for this environment: the VNet\'s range for a network-restricted deployment (ADR-0005), or a developer\'s own tester CIDR for the ADR-0003 test topology, which has no VNet to be internal to.')
 param allowedCidr string = '10.40.0.0/16'
 
+@description('ADR-0017: no IP rule, so the console is reached from any address; it then relies on Entra sign-in with AdminUi.Admin, which Deploy-AdminUi.ps1 requires with this switch.')
+param allowAnyAddress bool = false
+
 @description('The gateway Container App admin-ui reads and writes the configuration of (ADR-0010).')
 param gatewayAppName string = 'ca-claude-gw'
 
@@ -65,9 +68,26 @@ param enableSignIn bool = false
 @description('Application (client) ID of admin-ui\'s own sign-in app registration (not the gateway\'s). Required when enableSignIn is true.')
 param signInClientId string = ''
 
+@description('ADR-0018: the gateway app\'s purpose and runId tags, which Deploy-AdminUi.ps1 reads, so an install into an existing resource group can tell the console\'s resources from the customer\'s, and teardown removes them with the gateway.')
+param ownTags object = {}
+
+@description('ADR-0016: the object ID of the gateway\'s app registration, whose sign-in certificate or client secret job-signin-renewer renews. Empty: no job.')
+param gatewayApplicationObjectId string = ''
+
+@description('ADR-0016: validity of a certificate job-signin-renewer issues, in months.')
+@minValue(1)
+@maxValue(24)
+param signInCertificateMonths int = 12
+
+@description('ADR-0016: lifetime of a client secret job-signin-renewer issues, in days.')
+@minValue(1)
+@maxValue(365)
+param signInSecretDays int = 365
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = { name: environmentName }
 
 resource gatewayApp 'Microsoft.App/containerApps@2024-03-01' existing = { name: gatewayAppName }
+
 
 // A separate identity from the gateway's own (least privilege, ADR-0008): this one needs Microsoft Graph
 // application permissions the gateway's identity must not also hold, since the gateway identity's blast radius is
@@ -75,6 +95,7 @@ resource gatewayApp 'Microsoft.App/containerApps@2024-03-01' existing = { name: 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'id-admin-ui'
   location: location
+  tags: ownTags
 }
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-11-01-preview' existing = { name: acrName }
@@ -105,6 +126,7 @@ resource gatewayConfigWriter 'Microsoft.Authorization/roleAssignments@2022-04-01
 resource app 'Microsoft.App/containerApps@2024-03-01' = {
   name: appName
   location: location
+  tags: ownTags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${identity.id}': {} }
@@ -127,7 +149,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: 8080
         transport: 'http'
-        ipSecurityRestrictions: [
+        ipSecurityRestrictions: allowAnyAddress ? [] : [
           { name: 'allowed-cidr', description: 'Matches the gateway\'s own restriction for this environment (gateway.yaml access_control.allow_cidrs)', ipAddressRange: allowedCidr, action: 'Allow' }
         ]
       }
@@ -153,6 +175,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'GATEWAY_ADMIN_FILE_JSON', secretRef: 'gateway-admin-file-json' }
             { name: 'GATEWAY_RESOURCE_ID', value: gatewayApp.id }
             { name: 'GATEWAY_TOPOLOGY', value: gatewayTopology }
+            { name: 'GATEWAY_APPLICATION_OBJECT_ID', value: gatewayApplicationObjectId }
+            { name: 'SIGNIN_CERTIFICATE_MONTHS', value: string(signInCertificateMonths) }
+            { name: 'SIGNIN_SECRET_DAYS', value: string(signInSecretDays) }
             { name: 'GATEWAY_ADMIN_FILE_PATH', value: gatewayAdminFilePath }
             { name: 'ADMIN_UI_SIGN_IN', value: enableSignIn ? 'required' : 'off' }
           ]
@@ -179,6 +204,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
 resource pacerJob 'Microsoft.App/jobs@2024-03-01' = {
   name: 'job-spend-pacer'
   location: location
+  tags: ownTags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${identity.id}': {} }
@@ -215,6 +241,45 @@ resource pacerJob 'Microsoft.App/jobs@2024-03-01' = {
   dependsOn: [acrPull, gatewayConfigWriter]
 }
 
+// ADR-0016 (amended 2026-11-03): renews the gateway's Entra sign-in certificate or client secret 30 days before it ends,
+// daily, with admin-ui's identity (an owner of the gateway's app registration, Container Apps Contributor on the gateway).
+resource renewerJob 'Microsoft.App/jobs@2024-03-01' = if (!empty(gatewayApplicationObjectId)) {
+  name: 'job-signin-renewer'
+  location: location
+  tags: ownTags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${identity.id}': {} }
+  }
+  properties: {
+    environmentId: environment.id
+    configuration: {
+      triggerType: 'Schedule'
+      replicaTimeout: 1800
+      replicaRetryLimit: 0
+      scheduleTriggerConfig: { cronExpression: '17 3 * * *', parallelism: 1, replicaCompletionCount: 1 }
+      registries: [{ server: acrLoginServer, identity: identity.id }]
+    }
+    template: {
+      containers: [
+        {
+          name: 'signin-renewer'
+          image: '${acrLoginServer}/${imageTag}'
+          command: [ 'node', 'server/signin-renewer.mjs' ]
+          resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          env: [
+            { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'GATEWAY_RESOURCE_ID', value: gatewayApp.id }
+            { name: 'GATEWAY_APPLICATION_OBJECT_ID', value: gatewayApplicationObjectId }
+            { name: 'SIGNIN_CERTIFICATE_MONTHS', value: string(signInCertificateMonths) }
+            { name: 'SIGNIN_SECRET_DAYS', value: string(signInSecretDays) }
+          ]
+        }
+      ]
+    }
+  }
+  dependsOn: [acrPull, gatewayConfigWriter]
+}
 // Container Apps authentication (U-87): the platform signs users in and sets X-MS-CLIENT-PRINCIPAL, removing any copy
 // an external caller sends. No client secret: sign-in uses ID tokens, which carry the roles claim of the app roles
 // assigned to the user (https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra, "Client secret (optional)").

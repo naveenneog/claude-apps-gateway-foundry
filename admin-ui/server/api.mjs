@@ -134,6 +134,21 @@ async function handleAdr0010(req, deps, principal) {
     }
     return json(404, { error: 'no such user-tags route' });
   }
+  // ADR-0016: the gateway's Entra sign-in credential; Renew now replaces it in the background.
+  if (pathname === '/api/sign-in-credential' || pathname === '/api/sign-in-credential/renew') {
+    if (!deps.signInCredential) return notConfigured('Sign-in credential renewal (GATEWAY_APPLICATION_OBJECT_ID)');
+    if (pathname === '/api/sign-in-credential' && method === 'GET') return json(200, await deps.signInCredential.status());
+    if (pathname === '/api/sign-in-credential/renew' && method === 'POST') {
+      const denied = guard(); if (denied) return denied;
+      try {
+        return json(202, await deps.signInCredential.renew({ months: body?.months }));
+      } catch (error) {
+        if (error.status === 400 || error.status === 409) return json(error.status, { error: error.message });
+        throw error;
+      }
+    }
+    return json(404, { error: 'no such sign-in credential route' });
+  }
   if (pathname === '/api/client-kit' && method === 'GET') {
     if (!deps.clientKit) return notConfigured('Client files');
     return clientKitAnswer(searchParams, deps.clientKit);

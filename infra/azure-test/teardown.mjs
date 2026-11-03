@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Removes what deploy.mjs created, in dependency order, and only what carries this run's runId:
 // the role assignment on the Foundry account, the Entra app and its service principal, then the
-// resource group. Safe to re-run after a partial failure; --dry-run makes every check and deletes nothing.
+// resource group, or, in a group the installer did not create (ADR-0018), only the resources tagged with this runId.
+// Safe to re-run after a partial failure; --dry-run makes every check and deletes nothing.
 //   node infra/azure-test/teardown.mjs [--resource-group rg-claude-apps-gateway-test] [--dry-run] [--no-wait]
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { readState, statePath } from './deploy.mjs';
 import { arm, graph } from './lib/azure-rest.mjs';
+import { teardownTiers } from './lib/existing-group.mjs';
 import { foundryAccountIds } from './lib/plan.mjs';
 import { redactSecrets } from './lib/secrets.mjs';
 import { azJson } from './lib/spawn.mjs';
@@ -38,7 +40,7 @@ async function main() {
   }
   const groupPath = `/subscriptions/${state.subscriptionId}/resourceGroups/${group}`;
   const rg = await arm('GET', `${groupPath}?${GROUP_API}`, undefined, { ok: [200, 404] });
-  if (rg.status === 200 && (rg.json.tags?.purpose !== PURPOSE || rg.json.tags?.runId !== state.runId)) {
+  if (rg.status === 200 && !state.existingGroup && (rg.json.tags?.purpose !== PURPOSE || rg.json.tags?.runId !== state.runId)) {
     throw new Error(`resource group ${group} does not carry purpose ${PURPOSE} and runId ${state.runId}; refusing`);
   }
 
@@ -82,7 +84,9 @@ async function main() {
     say(sp.status === 200 ? `service principal ${sp.json.id} ${dryRun ? 'would be deleted with the app' : 'deleted'}` : 'service principal gone');
   }
 
-  if (rg.status === 200) {
+  if (rg.status === 200 && state.existingGroup) {
+    await removeOwnResources({ groupPath, runId: state.runId, act, dryRun });
+  } else if (rg.status === 200) {
     await act(`resource group ${group}`, () => arm('DELETE', `${groupPath}?${GROUP_API}`, undefined, { ok: [200, 202] }));
     if (!dryRun && values['no-wait']) {
       // The state file is the only record of what to clean up, so it stays until the group is gone.
@@ -103,6 +107,25 @@ async function main() {
     fs.rmSync(statePath(group), { force: true });
     say('state file removed');
   }
+}
+
+// ADR-0018: in a resource group the installer did not create, only the resources tagged with this run's runId are
+// deleted, apps and jobs first, then their environment, then the rest; the group and everything else stay.
+async function removeOwnResources({ groupPath, runId, act, dryRun }) {
+  const list = async () => (await arm('GET', `${groupPath}/resources?api-version=2021-04-01`)).json?.value ?? [];
+  const { tiers, unknown } = teardownTiers(await list(), runId);
+  for (const r of unknown) say(`left in place: ${r.type}/${r.name} carries this run's tag but is not a resource the installer creates, so teardown leaves it; delete it by hand if unused`);
+  for (const tier of tiers) {
+    for (const r of tier) await act(`${r.type}/${r.name}`, () => arm('DELETE', `${r.id}?api-version=${r.apiVersion}`, undefined, { ok: [200, 202, 204, 404] }));
+    if (dryRun) continue;
+    const ids = new Set(tier.map((r) => r.id.toLowerCase()));
+    const deadline = Date.now() + 30 * 60_000;
+    while ((await list()).some((r) => ids.has(String(r.id).toLowerCase()))) {
+      if (Date.now() > deadline) throw new Error('resources are still being deleted after 30 minutes; run teardown again later');
+      await sleep(15_000);
+    }
+  }
+  say(`resource group ${groupPath.split('/').at(-1)} kept: it was not created by the installer (ADR-0018)`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

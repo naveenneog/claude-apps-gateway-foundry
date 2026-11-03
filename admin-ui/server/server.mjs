@@ -13,6 +13,7 @@ import { capabilities, tokenRoles } from './capabilities.mjs';
 import { buildChargeback, chargebackCsv, collectEffective, findUser, listBusinessUnits, PERIODS } from './chargeback.mjs';
 import { createConfigStore } from './gateway-config.mjs';
 import { createGraphClient } from './graph-client.mjs';
+import { createSignInCredential } from './signin-credential.mjs';
 import { getManagedIdentityToken } from './managed-identity.mjs';
 import { createRole, gatewayApplication, listRoles } from './roles.mjs';
 import { createTagStore, gatewayDatabase } from './user-tags.mjs';
@@ -108,6 +109,9 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
     },
     tags,
     resolveUser,
+    // ADR-0016: present when the deployment names the gateway's app registration (main.bicep, GATEWAY_APPLICATION_OBJECT_ID).
+    signInCredential: arm && env.GATEWAY_APPLICATION_OBJECT_ID ? createSignInCredential({ arm, graph, resourceId, applicationId: env.GATEWAY_APPLICATION_OBJECT_ID,
+      months: Number(env.SIGNIN_CERTIFICATE_MONTHS || 12), secretDays: Number(env.SIGNIN_SECRET_DAYS || 365) }) : undefined,
     chargeback: {
       build: async ({ period, groupBy }) => buildChargeback({ rows: PERIODS.includes(period) ? await collectEffective({ gateway, period }) : [], graph, period, groupBy, tags: await tagsOrReason() }),
       csv: chargebackCsv,

@@ -11,11 +11,13 @@ const settingsPage = (() => {
     } });
     ctx.root.replaceChildren(ui.pageHeader({ title: 'Settings', description: DESCRIPTION, actions: [refresh] }),
       el('div', { class: 'grid-2' }, [ui.skeleton('block'), ui.skeleton('block')]), ui.skeleton('table', 6), ui.loading('Checking permissions'));
-    const [me, caps, config] = await Promise.all([ui.settle(ui.shared('/api/me')), ui.settle(ui.shared('/api/capabilities')), ui.settle(ui.shared('/api/gateway-config'))]);
+    const [me, caps, config, signIn] = await Promise.all([ui.settle(ui.shared('/api/me')), ui.settle(ui.shared('/api/capabilities')), ui.settle(ui.shared('/api/gateway-config')),
+      ui.settle(api.get('/api/sign-in-credential'))]);
     if (!ctx.active()) return;
     ctx.root.replaceChildren(
       ui.pageHeader({ title: 'Settings', description: DESCRIPTION, actions: [refresh] }),
       el('div', { class: 'grid-2' }, [identityCard(me), gatewayCard(config)]),
+      signInCard(ctx, signIn),
       permissionsCard(caps),
       onboardingCard(config));
   }
@@ -53,6 +55,39 @@ const settingsPage = (() => {
     ])]) });
   }
 
+  // ADR-0016: how the gateway signs in to Microsoft Entra, when that credential ends, and Renew now.
+  function signInCard(ctx, status) {
+    if (status instanceof Error) {
+      return ui.card({ title: 'Gateway sign-in credential', content: ui.banner('info', `Not available here: ${status.message}`) });
+    }
+    const view = settingsView.signIn(status);
+    const months = el('select', { name: 'signin-months', 'aria-label': 'Validity of the new certificate, in months' },
+      Array.from({ length: 24 }, (_, i) => el('option', { value: String(i + 1), text: `${i + 1} month${i ? 's' : ''}`, selected: i + 1 === (status.defaults?.months ?? 12) })));
+    const renew = ui.button('Renew now', { kind: 'secondary', iconName: 'refresh', onclick: async () => {
+      const ok = await ui.confirm({ title: 'Renew the gateway sign-in credential now?', confirmText: 'Renew now',
+        body: ['A new credential is registered next to the current one, a new gateway revision starts with it, and the old one is removed once that revision is ready. Signed-in developers stay signed in.'] });
+      if (!ok) return;
+      ui.busy(renew, true, 'Starting');
+      try {
+        await api.post('/api/sign-in-credential/renew', status.mode === 'certificate' ? { months: Number(months.value) } : {});
+        ui.toast('Renewal started. It takes a few minutes; Check again shows the result.');
+        render(ctx);
+      } catch (err) {
+        ui.toast(`Could not start the renewal: ${err.message}`, 'error');
+      } finally { ui.busy(renew, false); }
+    } });
+    const row = (label, value) => [el('dt', { text: label }), el('dd', {}, [value])];
+    return ui.card({ title: 'Gateway sign-in credential', description: 'What the gateway signs in to Microsoft Entra ID with.', content: el('div', { class: 'card-body stack' }, [
+      el('dl', { class: 'facts' }, [
+        ...row('Type', view.modeText),
+        ...row('Identifier', el('code', { text: status.credentialId ?? 'unknown' })),
+        ...row('Ends', ui.pill(view.endsText, view.kind)),
+      ]),
+      el('p', { text: view.note }),
+      view.lastRunText && ui.banner(status.lastRun?.state === 'failed' ? 'error' : 'info', [view.lastRunText]),
+      el('div', { class: 'kit-files' }, [status.mode === 'certificate' ? el('label', { class: 'field' }, [el('span', { text: 'New certificate valid for' }), months]) : null, renew]),
+    ]) });
+  }
   // P-41: every client file new-client-policy.mjs writes, for this gateway and a model of its admin file.
   function clientKitSection(config) {
     const models = Array.isArray(config?.admin?.models) ? config.admin.models.map((m) => m.id).filter(Boolean) : [];

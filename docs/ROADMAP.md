@@ -172,6 +172,26 @@
       Given the managed database option, when an administrator sets a user's department, cost center, company, office or division in **Chargeback** > **Business units**, or imports a CSV file, then admin-ui stores it in `admin_console.user_tags` by the user's Entra object ID over a TLS connection with SCRAM-SHA-256, Chargeback and its CSV group by it, gateway role grouping is unchanged, and no request writes an Entra user (T-141 to T-145).
       Given `Deploy-AdminUi.ps1`, when it grants the console's Microsoft Graph permissions, then it grants four, never `User.ReadWrite.All`, prints the removal command when an earlier install left it, and no document tells a reader to grant it; on Contoso a tag set in the console groups Chargeback and survives a gateway restart (T-146 to T-148).
       Depends on: P-38, P-35   Unknowns: U-125 to U-128
+- [ ] P-45 The gateway signs in with its own certificate, renewed by a job; client secrets up to 365 days as a fallback (ADR-0016, amended 2026-11-03)
+      Given `deployment.signInCredential: "certificate"` and `-KeyVaultName`, when the installer runs, then the certificate is created in that vault, the gateway reads it by version through its identity and signs in with `private_key_jwt`, and `job-signin-renewer` registers a renewed version in Entra before repointing the gateway, never removing the version it runs (T-150 to T-155).
+      Given `"secret"`, when the `app` stage runs, then `-ClientSecretDays` takes 1 to 365 and, with a Key Vault, the secret is kept and renewed there (T-152, T-153).
+      Depends on: P-34, P-41   Unknowns: U-130 to U-133
+
+- [ ] P-46 The installer uses an existing resource group without changing or deleting it (ADR-0018)
+      Given `-UseExistingResourceGroup`, when `base` and teardown run, then the group is used without its tags, a name clash stops `base` before it deploys, and teardown removes only this run's resources (T-156, T-161).
+      Depends on: P-34   Unknowns: U-136
+
+- [ ] P-47 The gateway and the console are open to every address by default; an IP range is opt-in (ADR-0017)
+      Given a new install with no range, when the installer runs, then neither app has an IP rule, the gateway's allow list is `0.0.0.0/0` and the console keeps sign-in; given `-TesterCidr` or `-AllowedCidr`, that app is limited; later runs keep the recorded choice (T-157, T-161).
+      Depends on: P-34   Unknowns: U-134
+
+- [ ] P-49 A Key Vault store for the sign-in credential on the network-restricted topology, where a private endpoint reaches a vault whose public access a policy disables (ADR-0016 amendment, U-137)
+      Given the network-restricted topology and a customer Key Vault, when the app stage runs, then the gateway reads its sign-in certificate through a private endpoint and the renewal job writes new versions there.
+      Depends on: P-45   Unknowns: U-137
+
+- [ ] P-48 A read-only preflight, and the managed database created first with region fallback (ADR-0018)
+      Given `-Plan` or an install, when `preflight` runs, then it reports each prerequisite and stops on a failure; given a region list, when the database step runs, then a refused region falls back to the next within minutes, before any other resource is built (T-158 to T-162).
+      Depends on: P-34, P-38   Unknowns: U-135, U-136
 
 - [ ] P-42 Chargeback by surface and tokens, without more Log Analytics ingestion or infrastructure cost (ADR-0013, Proposed)
       Given relayed client metrics rolled up per day, user `sub`, surface, model and token type in the managed PostgreSQL by a sidecar that shares the gateway app's 1 vCPU and 2 GiB (ADR-0013), when the Chargeback page and its CSV are built, then each person and business unit shows tokens by type per surface and model and spend by surface split from the gateway's own `/effective` total, with spend no telemetry explains shown as Not attributed (T-127 to T-129, T-132).
@@ -252,7 +272,7 @@
 - A check that a `path:line` citation into a ledger file lands on the heading or row the citing sentence names, not
   only on a line with text: rows added to `docs/TEST-PLAN.md` and `docs/STATUS.md` move every later line, and four
   TEST-PLAN citations in the Learn articles had drifted to other rows while every check passed (re-anchored by P-34's
-  council, 2026-10-21). `docs/GATEWAY-COMPARISON.md` still cites `docs/STATUS.md:27` for the test deployment's cost,
+  council, 2026-10-21). `docs/GATEWAY-COMPARISON.md` still cites `docs/STATUS.md:44` for the test deployment's cost,
   which is now on another line; citing a heading by name instead of a line number would not drift.
 - Cross-tenant Foundry support in `infra/azure-test/deploy.mjs` and `gateway-test.json`: the Contoso gateway reaches a
   Foundry account in another tenant through `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` added to the

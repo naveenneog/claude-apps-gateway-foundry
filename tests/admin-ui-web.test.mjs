@@ -625,3 +625,18 @@ test('T-140 the soft limit reads and writes spendPacing, keeps every other key, 
   const topics = load('help-topics.js', 'helpTopics');
   assert.ok(topics.some((topic) => topic.id === 'soft-limit' && topic.labels.includes('Soft limit')), 'Help explains the soft limit');
 });
+
+test('T-154 settingsView.signIn: the credential in words, its end and how urgent it is, and the last Renew now', () => {
+  const sv = load('settings-view.js', 'settingsView');
+  const cert = sv.signIn({ mode: 'certificate', credentialId: 'ABC', endsAt: '2027-11-03T12:00:00Z', daysLeft: 365, renewsWithinDays: 30, defaults: { months: 12 }, lastRun: null });
+  assert.equal(cert.modeText, 'Certificate (self-signed, no client secret)');
+  assert.equal(cert.kind, 'ok');
+  assert.match(cert.endsText, /^2027-11-03 \(365 days\)$/);
+  assert.match(cert.note, /renews it 30 days before/);
+  const soon = sv.signIn({ mode: 'secret', credentialId: 'k', endsAt: '2026-11-20T00:00:00Z', daysLeft: 16, renewsWithinDays: 30, defaults: { months: 12 }, lastRun: { state: 'failed', finishedAt: '2026-11-03T03:20:00Z' } });
+  assert.equal(soon.modeText, 'Client secret');
+  assert.equal(soon.kind, 'warn');
+  assert.match(soon.lastRunText, /failed/);
+  assert.equal(sv.signIn({ mode: 'certificate', daysLeft: -1, endsAt: '2026-01-01T00:00:00Z' }).kind, 'danger');
+  assert.equal(sv.signIn({ mode: null }).modeText, 'Unknown');
+});

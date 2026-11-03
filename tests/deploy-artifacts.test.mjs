@@ -78,10 +78,9 @@ test('template: every test-topology rendering, the admin API ones included, has 
 test('config and template: both allow lists are bound to the one testerCidr parameter, which has no default', () => {
   assert.deepEqual(flowList(field(block(config, 'access_control'), 'allow_cidrs')), ['${TESTER_CIDR}']);
   assert.equal(envOf(containers.gateway).TESTER_CIDR.value, param('testerCidr'));
+  // ADR-0017: one Allow rule on testerCidr unless anyAddress empties the list (T-157 checks the expression in full).
   const rules = app.properties.configuration.ingress.ipSecurityRestrictions;
-  assert.equal(rules.length, 1, 'one ingress rule');
-  assert.equal(rules[0].action, 'Allow');
-  assert.equal(rules[0].ipAddressRange, param('testerCidr'));
+  assert.match(rules, /createArray\(createObject\('name', 'tester-egress', 'description', '[^']+', 'action', 'Allow', 'ipAddressRange', parameters\('testerCidr'\)\)\)/);
   assert.equal(template.parameters.testerCidr.defaultValue, undefined, 'testerCidr must be supplied');
 });
 
@@ -184,8 +183,8 @@ test('template: one replica, one revision, sidecar data on replica storage, conf
   assert.deepEqual(containers.postgres.volumeMounts.map((m) => m.volumeName), ['pgdata']);
   const pgMount = containers.postgres.volumeMounts[0].mountPath;
   assert.ok(envOf(containers.postgres).PGDATA.value.startsWith(`${pgMount}/`), 'PGDATA lives on the EmptyDir volume');
-  const exec = /^\s*exec \/usr\/local\/bin\/claude gateway --config (\S+)$/m.exec(entrypoint);
-  assert.ok(exec, 'entrypoint execs the gateway');
+  assert.match(entrypoint, /^\s*exec "\$CLAUDE_BIN" gateway --config "\$CONFIG"$/m, 'entrypoint execs the gateway');
+  const exec = [null, /^CONFIG="\$\{GATEWAY_CONFIG:-(\S+)\}"$/m.exec(entrypoint)?.[1]];
   assert.equal(exec[1], `${containers.gateway.volumeMounts[0].mountPath}/gateway.yaml`);
   const cpu = Object.values(containers).reduce((n, c) => n + Number(/[\d.]+/.exec(c.resources.cpu)[0]), 0);
   const memory = Object.values(containers).reduce((n, c) => n + Number(/[\d.]+/.exec(c.resources.memory)[0]), 0);
@@ -266,8 +265,9 @@ test('Dockerfile: pinned base, pinned release checked by verify-release.sh, non-
   for (const from of dockerfile.match(/^FROM .+$/gm)) assert.match(from, /^FROM \$\{BASE_IMAGE\}( AS \w+)?$/);
   const sha = /^ARG CLAUDE_SHA256=([0-9a-f]{64})$/m.exec(dockerfile)?.[1];
   assert.ok(sha, 'CLAUDE_SHA256 pinned');
-  assert.ok(sha.startsWith('1e08503d') && sha.endsWith('b322925b'), 'matches the checksum recorded in U-5');
-  assert.match(dockerfile, /^ARG CLAUDE_VERSION=2\.1\.280$/m);
+  // 2.1.311 (ADR-0016, 2026-11-03): manifest.json platforms.linux-x64.checksum; verify-release.sh checks the signed manifest.
+  assert.ok(sha.startsWith('86dc1fcc') && sha.endsWith('be8489ada'), 'matches the 2.1.311 manifest checksum');
+  assert.match(dockerfile, /^ARG CLAUDE_VERSION=2\.1\.311$/m);
   assert.match(dockerfile, /^ARG CLAUDE_KEY_FINGERPRINT=31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE$/m);
   assert.match(dockerfile, /^\s+bash \/usr\/local\/bin\/verify-release\.sh \/release "\$\{CLAUDE_VERSION\}" linux-x64 "\$\{CLAUDE_SHA256\}" "\$\{CLAUDE_KEY_FINGERPRINT\}"; \\$/m);
   for (const url of dockerfile.match(/[a-z]+:\/\/\S+/g)) assert.match(url, /^https:\/\//, `${url} uses HTTPS`);
@@ -283,7 +283,7 @@ test('shell scripts: LF endings, strict mode, a bounded wait, and git keeps them
     assert.ok(!text.includes('\r'), `${rel} has no CR characters`);
     if (rel.endsWith('.sh')) assert.match(text, /^set -euo pipefail$/m, `${rel} runs in strict mode`);
   }
-  const loop = /^for _ in \{1\.\.(\d+)\}; do$/m.exec(entrypoint);
+  const loop = /^\s*for _ in \{1\.\.(\d+)\}; do$/m.exec(entrypoint);
   assert.ok(loop && Number(loop[1]) <= 120, 'the store wait is bounded');
   const attributes = read('.gitattributes');
   assert.match(attributes, /^\*\.sh text eol=lf$/m);
@@ -393,8 +393,10 @@ test('T-114 template: the gateway gets GATEWAY_PG_HOST, 127.0.0.1 for the sideca
 });
 
 test('T-114 the managed gateway command is the one the entrypoint execs, with the config the template mounts', () => {
-  const exec = /^\s*exec (\/usr\/local\/bin\/claude) (gateway --config \S+)$/m.exec(entrypoint);
-  assert.deepEqual(GATEWAY_COMMAND, { command: [exec[1]], args: exec[2].split(' ') });
+  const bin = /^CLAUDE_BIN="\$\{CLAUDE_BIN:-(\S+)\}"$/m.exec(entrypoint)[1];
+  const config = /^CONFIG="\$\{GATEWAY_CONFIG:-(\S+)\}"$/m.exec(entrypoint)[1];
+  assert.match(entrypoint, /^exec "\$CLAUDE_BIN" gateway --config "\$CONFIG"$/m);
+  assert.deepEqual(GATEWAY_COMMAND, { command: [bin], args: ['gateway', '--config', config] });
 });
 
 // T-137 (ADR-0014): the pacer key exists wherever the admin API does, keeps its value on a later run, and the job that
@@ -405,7 +407,7 @@ test('T-137 template: GATEWAY_ADMIN_PACER_KEY is set from admin-pacer-key, and a
     deployment: { adminApi: true }, spendPacing: { softLimitPercent: 80 } });
   assert.ok(configVariables(paced).includes('GATEWAY_ADMIN_PACER_KEY'));
   assert.deepEqual(unsetConfigVariables(paced, template), []);
-  const deploy = read('infra/azure-test/deploy.mjs');
+  const deploy = read('infra/azure-test/deploy.mjs') + read('infra/azure-test/lib/credentials.mjs');
   assert.match(deploy, /registerSecret\(live\.secrets\['admin-pacer-key'\] \|\| newSecret\(32\)\)/, 'a later run keeps the live value');
   assert.match(deploy, /gatewayAdminPacerKey: secrets\.pacer/);
 });
@@ -425,4 +427,58 @@ test('T-137 admin-ui main.bicep: job-spend-pacer runs every five minutes from ad
   assert.match(job, /\{ name: 'GATEWAY_ADMIN_FILE_JSON', secretRef: 'gateway-admin-file-json' \}/);
   assert.doesNotMatch(job, /gatewayAdminWriteKey|PACER_KEY|admin-pacer-key|write-key/i, 'the job reads the keys from the gateway app, so none is passed to it');
   assert.match(job, /dependsOn: \[[^\]]*gatewayConfigWriter/, 'the role that lets it read the gateway app\'s secrets exists first');
+});
+
+// T-157: the console template drops its IP rule only when asked, and Deploy-AdminUi.ps1 refuses that without sign-in.
+test('T-157 main.bicep has an allowAnyAddress switch; Deploy-AdminUi.ps1 passes it and refuses it without -EnableSignIn', () => {
+  const bicep = read('admin-ui/infra/main.bicep');
+  assert.match(bicep, /param allowAnyAddress bool = false/);
+  assert.match(bicep, /ipSecurityRestrictions: allowAnyAddress \? \[\] : \[/);
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(deploy, /\[switch\]\$AllowAnyAddress/);
+  assert.match(deploy, /allowAnyAddress\s+= @\{ value = \[bool\]\$AllowAnyAddress \}/);
+  assert.match(deploy, /if \(\$AllowAnyAddress -and -not \$EnableSignIn\) \{ throw/);
+});
+
+// T-157: the gateway template drops its IP rule only when anyAddress is true.
+test('T-157 gateway-test.json has an anyAddress parameter that empties ipSecurityRestrictions', () => {
+  const t = JSON.parse(read('infra/azure-test/gateway-test.json'));
+  assert.deepEqual(t.parameters.anyAddress, { type: 'bool', defaultValue: false, metadata: t.parameters.anyAddress.metadata });
+  const app = t.resources.find((r) => r.type === 'Microsoft.App/containerApps');
+  const rules = app.properties.configuration.ingress.ipSecurityRestrictions;
+  assert.equal(typeof rules, 'string');
+  assert.match(rules, /^\[if\(parameters\('anyAddress'\), createArray\(\), createArray\(createObject\('name', 'tester-egress'.*'ipAddressRange', parameters\('testerCidr'\)\)\)\)\]$/);
+});
+
+test('T-156 admin-ui main.bicep tags its identity, app and job with ownTags, which Deploy-AdminUi.ps1 reads from the gateway app', () => {
+  const bicep = read('admin-ui/infra/main.bicep').replace(/\r\n/g, '\n');
+  assert.match(bicep, /^param ownTags object = \{\}$/m);
+  for (const name of ["'id-admin-ui'", 'appName', "'job-spend-pacer'"]) {
+    assert.match(bicep, new RegExp(`  name: ${name}\\n  location: location\\n  tags: ownTags\\n`), name);
+  }
+  const ps = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(ps, /az containerapp show -g \$ResourceGroup -n \$GatewayAppName --query tags -o json/);
+  assert.match(ps, /ownTags\s+= @\{ value = \$gatewayTags \}/);
+});
+test('T-153 admin-ui main.bicep: job-signin-renewer runs daily from admin-ui\'s image and identity, only with the gateway\'s app registration', () => {
+  const bicep = read('admin-ui/infra/main.bicep').replace(/\r\n/g, '\n');
+  const job = bicep.split(/^(?=resource )/m).find((b) => /^resource renewerJob /.test(b));
+  assert.match(job, /= if \(!empty\(gatewayApplicationObjectId\)\) \{/);
+  assert.match(job, /name: 'job-signin-renewer'/);
+  assert.match(job, /cronExpression: '17 3 \* \* \*'/);
+  assert.match(job, /userAssignedIdentities: \{ '\$\{identity\.id\}': \{\} \}/);
+  assert.match(job, /command: \[ 'node', 'server\/signin-renewer\.mjs' \]/);
+  for (const env of ['AZURE_CLIENT_ID', 'GATEWAY_RESOURCE_ID', 'GATEWAY_APPLICATION_OBJECT_ID', 'SIGNIN_CERTIFICATE_MONTHS', 'SIGNIN_SECRET_DAYS']) assert.match(job, new RegExp(`name: '${env}'`), env);
+  assert.doesNotMatch(job, /secrets:/, 'no secret of its own: it reads the gateway app');
+  const ps = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(ps, /gatewayApplicationObjectId = @\{ value = \$gatewayAppObjectId \}/);
+});
+test('image hardening (2026-11-03): admin-ui runs on Microsoft\'s distroless Node.js image, pinned by digest, as a non-root user', () => {
+  const df = read('admin-ui/Dockerfile').replace(/\r\n/g, '\n');
+  const froms = df.match(/^FROM .+$/gm);
+  assert.deepEqual(froms.length, 1);
+  assert.match(froms[0], /^FROM mcr\.microsoft\.com\/azurelinux\/distroless\/nodejs:[\w.-]+-nonroot-[\w.-]+@sha256:[0-9a-f]{64}$/);
+  assert.match(df, /^USER nonroot$/m);
+  assert.doesNotMatch(df, /^RUN /m, 'distroless has no shell to RUN with');
+  assert.match(df, /^CMD \["node", "server\/server\.mjs"\]$/m);
 });

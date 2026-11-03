@@ -8,6 +8,7 @@
     "location": { "type": "string", "defaultValue": "[resourceGroup().location]" },
     "runId": { "type": "string" },
     "testerCidr": { "type": "string", "metadata": { "description": "The one range both allow lists admit; deploy.mjs refuses ranges wider than /24." } },
+    "anyAddress": { "type": "bool", "defaultValue": false, "metadata": { "description": "ADR-0017: no IP rule on the gateway, which then admits every address; access still needs Entra sign-in with a gateway role." } },
     "foundryResourceGroup": { "type": "string" },
     "foundryAccountName": { "type": "string" },
     "deployApp": { "type": "bool", "defaultValue": false },
@@ -195,9 +196,8 @@
             "targetPort": 8080,
             "transport": "auto",
             "allowInsecure": false,
-            "ipSecurityRestrictions": [
-              { "name": "tester-egress", "description": "Tester egress range (ADR-0003)", "action": "Allow", "ipAddressRange": "[parameters('testerCidr')]" }
-            ],
+            "ipSecurityRestrictions": "[if(parameters('anyAddress'), createArray(), createArray(createObject('name', 'tester-egress', 'description', 'Tester egress range (ADR-0003)', 'action', 'Allow', 'ipAddressRange', parameters('testerCidr'))))]",
+
             "traffic": [{ "latestRevision": true, "weight": 100 }]
           },
           "registries": [
