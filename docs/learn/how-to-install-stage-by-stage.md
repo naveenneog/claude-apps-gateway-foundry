@@ -150,7 +150,7 @@ pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-g
 
 `-Plan` runs the read-only `preflight` stage and prints every other stage's command line without running it. In a subscription other than the original test one,
 `-FoundryResourceGroup` and `-FoundryAccount` name the Foundry account the gateway serves from, and `-EmailDomain`
-is needed when the signed-in account has no mail address (infra/azure-test/deploy.mjs:213-214). `-Steps` runs a subset,
+is needed when the signed-in account has no mail address (infra/azure-test/deploy.mjs:215-216). `-Steps` runs a subset,
 always in the order above; asking for `app` also runs `config`, so a stale rendering is never deployed
 (infra/azure-test/Install-ClaudeGateway.ps1:146). With `-TesterCidr`, the block must hold this machine's egress address, which can change between requests
 (docs/UNKNOWNS.md, U-33). On 2026-10-21 one run of all seven stages into an empty resource
@@ -168,8 +168,8 @@ record it, or the record is completed by hand where the table says so.
 |---|---|
 | `config` | Run it again; it only writes the rendering |
 | `base` | Deploy the same template by hand, then run the stage again: it finds every resource in place and records their names |
-| `entra` | Add the registration's identifiers to the state file before running it again; otherwise it registers a second application (infra/azure-test/deploy.mjs:222-224) |
-| `image` | Run it again; it imports PostgreSQL when the registry lacks it, builds the gateway image again and records both digests, which `app` deploys (infra/azure-test/deploy.mjs:265-287); an image built by hand is not used |
+| `entra` | Add the registration's identifiers to the state file before running it again; otherwise it registers a second application (infra/azure-test/deploy.mjs:224-226) |
+| `image` | Run it again; it imports PostgreSQL when the registry lacks it, builds the gateway image again and records both digests, which `app` deploys (infra/azure-test/deploy.mjs:267-289); an image built by hand is not used |
 | `app` | Run it again; it keeps the live app's JWT secret, database password and admin key (infra/azure-test/lib/credentials.mjs:46-48) |
 | `budgets` | Nothing to record; the gateway keeps the caps |
 | `admin-ui` | Run it again; a Graph permission already granted is reported and not granted twice |
@@ -197,10 +197,16 @@ Performed by: the account that runs the install. Nothing in Azure or Entra chang
 pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup rg-claude-gw-eval -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -DatabaseLocation eastus,centralus -Plan
 ```
 
-Each check prints one line, `PASS`, `WARN` or `FAIL` (infra/azure-test/lib/preflight.mjs:51):
+Each check prints one line, `PASS`, `WARN` or `FAIL` (infra/azure-test/lib/preflight.mjs:59):
 
 | Check | `FAIL` when |
 |---|---|
+| Tools | Node.js is older than 22, the Azure CLI older than 2.60 or missing, or its `containerapp` extension is missing |
+| Azure role | The signed-in account cannot create the resource group, or cannot assign roles in it (Owner, or Contributor and User Access Administrator) |
+| Foundry account access | The signed-in account cannot assign the gateway's identity a role on the account; or the account's public network access is off, or its endpoint subdomain is not its name |
+| Entra | The signed-in account may not register applications (Application Administrator, Cloud Application Administrator, or the tenant's user setting). Without an active Privileged Role Administrator or Global Administrator the line is a `WARN`: the `admin-ui` stage stops at its Microsoft Graph grant |
+| Resource providers | A `WARN` with the `az provider register` command when `Microsoft.App`, `Microsoft.ContainerRegistry`, `Microsoft.OperationalInsights` or `Microsoft.ManagedIdentity` is not registered |
+| Sign-in | The installing account has no e-mail address in Entra ID and the admin file has no `deployment.emailClaim` |
 | Resource group | It exists, was not created by the installer, and `-UseExistingResourceGroup` is not given; or it holds a resource named like one the installer creates (for example `ca-claude-gw`) that this install did not make |
 | Foundry account | The account is not in `-FoundryResourceGroup`, the signed-in account may not read it, or it has no deployment named in the admin file's `models[].deployment` |
 | Database regions | With `deployment.database` `managed`: no region in `-DatabaseLocation` offers PostgreSQL 16 on Burstable `Standard_B1ms` to this subscription. A region that does not is a `WARN` and is skipped |
@@ -257,7 +263,7 @@ Performed by: an account that may register applications in the tenant ([Prerequi
 node infra/azure-test/deploy.mjs --any-address --step entra --resource-group rg-claude-gw-eval --app-display-name claude-apps-gateway-eval
 ```
 
-Needs `base`: the redirect URI is the gateway host name `base` created (infra/azure-test/deploy.mjs:213). The app
+Needs `base`: the redirect URI is the gateway host name `base` created (infra/azure-test/deploy.mjs:215). The app
 roles, the `email` optional claim and the delegated permissions come from `infra/azure-test/entra-app.json`.
 `set-developer.mjs` assigns a role by the ID that manifest gives it, so a registration made by hand carries the same
 role IDs (scripts/admin/set-developer.mjs:77, scripts/admin/set-developer.mjs:102).
@@ -296,9 +302,9 @@ Performed by: the Azure administrator who ran `base`.
 node infra/azure-test/deploy.mjs --any-address --step image --resource-group rg-claude-gw-eval
 ```
 
-Needs `base`: the registry name comes from its record (infra/azure-test/deploy.mjs:267-268). The tag is the pinned
+Needs `base`: the registry name comes from its record (infra/azure-test/deploy.mjs:269-270). The tag is the pinned
 Claude Code version plus a timestamp, and the record holds each image's digest, which `app` deploys
-(infra/azure-test/deploy.mjs:276-285).
+(infra/azure-test/deploy.mjs:278-287).
 
 # [Azure CLI](#tab/cli-image)
 
@@ -331,7 +337,7 @@ node infra/azure-test/deploy.mjs --any-address --step app --resource-group rg-cl
 ```
 
 Before it changes anything, the stage stops when the rendering references a `${VAR}` the template does not set,
-because the gateway would not boot (infra/azure-test/deploy.mjs:331-332), and when the live app holds secrets or
+because the gateway would not boot (infra/azure-test/deploy.mjs:333-334), and when the live app holds secrets or
 variables the template does not define, which a redeploy would delete (infra/azure-test/lib/credentials.mjs:39-44). It
 generates the admin API key once and keeps the live one on every later run. For Entra sign-in it makes a self-signed
 certificate, registers it on the app registration, and deploys it as the secret `oidc-certificate`; a later run keeps a

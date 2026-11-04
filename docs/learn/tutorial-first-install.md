@@ -51,13 +51,13 @@ The install needs three Microsoft roles. One person can hold all of them, or sev
 | **Owner** on the Azure subscription | The install creates resources and gives the gateway's identity a role on the Foundry account | infra/azure-test/gateway-test.json:107-143 |
 | An Entra account that may register applications, such as **Application Administrator** | The gateway signs developers in through its own app registration | https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app |
 | **Privileged Role Administrator** or **Global Administrator**, for one step | The admin console reads users and roles through Microsoft Graph application permissions, which only these roles grant. When the installing account lacks the role, the install stops at its last stage and a person who holds it runs the commands of one step ([Run the install](#run-the-install)); in this project's installs the role was activated through Privileged Identity Management for the grant (docs/UNKNOWNS.md, U-75) | https://learn.microsoft.com/en-us/powershell/entra-powershell/grant-api-permissions-managed-identity |
-| A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:279) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
+| A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:281) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
 | A Microsoft Foundry account with Claude models deployed, in the same subscription and Entra tenant as the install, that accepts traffic from public networks, and whose endpoint subdomain is its name, as Foundry creates it | The gateway calls Claude through it with its managed identity, and names it by the account name (config/gateway.azure-test.yaml:36); the identity gets a role on that account (infra/azure-test/gateway-test.json:107-143) | https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude |
 | Optional: an existing resource group, for example the one that holds the Foundry account | `-UseExistingResourceGroup` installs into it; without the option the installer creates its own group | docs/adr/0018-existing-resource-group-preflight-and-database-first.md:1 |
 | For Intune onboarding: the Intune **Application Manager** role, and Windows devices joined or registered to Entra ID and enrolled in Intune | Intune installs the developer apps | https://learn.microsoft.com/en-us/intune/intune-service/fundamentals/role-based-access-control |
 
 Developers sign in with an e-mail address in the same domain as the account that runs the install, for example
-`contoso.com`; the gateway admits that one domain (config/gateway.azure-test.yaml:20; infra/azure-test/deploy.mjs:216).
+`contoso.com`; the gateway admits that one domain (config/gateway.azure-test.yaml:20; infra/azure-test/deploy.mjs:218).
 When the installing account's e-mail is in another domain, such as `contoso.onmicrosoft.com`, `-EmailDomain contoso.com`
 on the install command sets the developers' domain instead.
 
@@ -143,7 +143,7 @@ $regions = 'eastus2,centralus,westus3'
 | `$rg` | The resource group for the gateway. The installer creates it; for a group that already exists, the install command also takes `-UseExistingResourceGroup` ([resource groups](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/manage-resource-groups-portal)) |
 | `$foundryRg`, `$foundry` | The Foundry account's resource group and name, from its **Overview** page in the Azure portal |
 | `$admins` | Who may open the admin console: the signed-in account. Several people are written as `'a@contoso.com,b@contoso.com'`. A guest or personal Microsoft account prints a name that is not a user principal name of the tenant; `$admins` is then set to a member account of the tenant |
-| `$regions` | The regions to try for the managed database, in order. The installer skips a region that does not offer the database to the subscription and moves to the next when one refuses it (infra/azure-test/lib/preflight.mjs:54) |
+| `$regions` | The regions to try for the managed database, in order. The installer skips a region that does not offer the database to the subscription and moves to the next when one refuses it (infra/azure-test/lib/preflight.mjs:59) |
 
 ### Choose who can reach the gateway
 
@@ -223,18 +223,27 @@ A mistake is reported by field, for example `models[1].deployment: ...`, and not
 ## Preview the install
 
 `-Plan` runs the read-only checks of the `preflight` stage and prints every other command the installer would run; it
-changes nothing (infra/azure-test/lib/preflight.mjs:54):
+changes nothing (infra/azure-test/lib/preflight.mjs:59):
 
 ```powershell
 pwsh -File infra/azure-test/Install-ClaudeGateway.ps1 -ResourceGroup $rg -AdminFile config/gateway-admin.azure-eval.json -FoundryResourceGroup $foundryRg -FoundryAccount $foundry -AppRegistrationName claude-apps-gateway-eval -SignInAdmins $admins -DatabaseLocation $regions -Plan
 ```
 
-With a group that already exists, the command also takes `-UseExistingResourceGroup`. The checks print one line each;
-a `FAIL` line names what to change before the install:
+With a group that already exists, the command also takes `-UseExistingResourceGroup`. The checks cover each prerequisite in [Before you begin](#before-you-begin) that can be read: the tools, the
+Azure and Entra roles, the Foundry account and its deployments, the resource providers, the sign-in e-mail claim and the
+database regions. They print one line each; a `FAIL` line names what to change before the install:
 
 ```output
+[deploy] preflight: PASS  tools: Node.js 22.11.0, Azure CLI 2.77.0 with the containerapp extension
+[deploy] preflight: PASS  Azure role: the signed-in account may create the resource group and assign roles in the subscription
 [deploy] preflight: PASS  resource group rg-claude-gw-eval: does not exist; the base stage creates it in eastus2
 [deploy] preflight: PASS  Foundry account ai-contoso: holds claude-sonnet-5, claude-opus-5
+[deploy] preflight: PASS  Foundry account ai-contoso: reachable from public networks at its own name
+[deploy] preflight: PASS  Foundry account ai-contoso: the signed-in account may give the gateway's identity a role on it
+[deploy] preflight: PASS  Entra: may register the gateway's app
+[deploy] preflight: WARN  Entra: the signed-in account holds neither Privileged Role Administrator nor Global Administrator (active), so the admin-ui stage stops at the Microsoft Graph grant; ...
+[deploy] preflight: PASS  resource providers: Microsoft.App, Microsoft.ContainerRegistry, Microsoft.OperationalInsights, Microsoft.ManagedIdentity registered
+[deploy] preflight: PASS  sign-in: the gateway reads the email claim; the installing account has an e-mail address
 [deploy] preflight: WARN  database region eastus2: Burstable Standard_B1ms is not offered; skipped
 [deploy] preflight: PASS  database region centralus: PostgreSQL 16, Burstable Standard_B1ms offered
 [deploy] preflight: passed; nothing was changed
@@ -303,7 +312,7 @@ When a stage stops, the installer names it and the section of
 Every stage can run again: a stage that already ran finds its resources and changes only what differs
 (docs/adr/0009-a-staged-installer-over-the-existing-deploy-scripts.md:1). After the admin console has saved the
 gateway's configuration, the `app` stage keeps the console's configuration and prints `the admin console saved this
-gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:330-332); models,
+gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:332-334); models,
 roles and policies are then changed in the console. A later run names its stages with `-Steps`, such as `-Steps app` or
 `-Steps admin-ui`, and keeps the recorded address choice unless `-TesterCidr` or `-AllowedCidr` changes it: the `budgets` stage sets the spend caps from
 the admin file again, replacing caps changed in the console
@@ -325,13 +334,13 @@ docs/adr/0011-admin-ui-is-admin-only-with-sign-in.md:1). Its pages are described
 | **AdminUi.Admin is required** | The account is assigned to the sign-in application without the `AdminUi.Admin` role; the same command assigns the role |
 | **Need admin approval** | The tenant stops user consent; an Application Administrator grants it as in [Give developers access](#give-developers-access) |
 
-The installing account already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:253), so the gateway can be
+The installing account already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:255), so the gateway can be
 checked end to end before any developer is onboarded: [Onboard developers](#onboard-developers), the `new-client-policy.mjs` command and
 [One machine](#one-machine), on this machine when it runs Windows, then [Check that it works](#check-that-it-works).
 
 ## Give developers access
 
-The account that ran the install already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:253). On the console's
+The account that ran the install already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:255). On the console's
 **Developers** page, a user principal name and a role, `Gateway.Standard` or `Gateway.Premium`, then
 **Grant role** gives a developer access (docs/learn/how-to-use-admin-console.md:59). The role decides the models and
 whether Claude Desktop is available, as the admin file's `policies` set them. For a group of developers, the

@@ -165,6 +165,8 @@ async function stepBase(ctx) {
 // The database the rendered configuration names (ADR-0012); sidecar when --config is not there yet.
 const configuredDatabase = (ctx) => (fs.existsSync(path.resolve(ctx.opts.config)) ? databaseOf(fs.readFileSync(path.resolve(ctx.opts.config), 'utf8')) : 'sidecar');
 
+// The tools on this machine (P-48, T-163); `az version` is null when the Azure CLI does not answer.
+const localTools = () => { let az = null; try { az = azJson(['version']); } catch { /* reported by toolProblems */ } return { node: process.versions.node, az }; };
 const signedInUser = async () => { const me = (await graph('GET', '/me?$select=mail,userPrincipalName')).json; return { mail: me.mail, upn: me.userPrincipalName }; };
 
 async function preflightInput(ctx) {
@@ -173,7 +175,7 @@ async function preflightInput(ctx) {
     useExisting: ctx.opts['use-existing-resource-group'], location: ctx.opts.location, models: admin.models ?? [],
     foundry: { resourceGroup: ctx.opts['foundry-resource-group'], account: ctx.opts['foundry-account'] },
     database: admin.deployment?.database ?? configuredDatabase(ctx), databaseOption: ctx.opts['database-location'],
-    emailClaim: admin.deployment?.emailClaim, signedIn: ctx.opts.admin ? await signedInUser() : undefined };
+    emailClaim: admin.deployment?.emailClaim, ...(ctx.opts.admin ? { signedIn: await signedInUser(), graph, tools: localTools() } : {}) };
 }
 
 // ADR-0018: read-only; prints one line per check and stops the install on a failure.
@@ -192,7 +194,7 @@ async function databaseFirst(ctx) {
   // Registered before the region check, which an unregistered provider cannot answer (code review, 2026-11-03).
   if (!ctx.opts['what-if']) await ensureProvider({ arm, subscriptionPath: `/subscriptions/${ctx.state.subscriptionId}`, say });
   if (!existing) {
-    const { databaseRegions: usable, lines } = await runPreflight({ ...(await preflightInput(ctx)), database: 'managed', foundry: null });
+    const { databaseRegions: usable, lines } = await runPreflight({ ...(await preflightInput(ctx)), database: 'managed', foundry: null, graph: null, tools: null, signedIn: undefined });
     if (!usable.length) throw new Error(`no usable database region:\n  ${lines.filter((l) => /database/.test(l)).join('\n  ')}`);
     regions = usable;
   }
