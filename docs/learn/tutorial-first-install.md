@@ -51,13 +51,13 @@ The install needs three Microsoft roles. One person can hold all of them, or sev
 | **Owner** on the Azure subscription | The install creates resources and gives the gateway's identity a role on the Foundry account | infra/azure-test/gateway-test.json:107-143 |
 | An Entra account that may register applications, such as **Application Administrator** | The gateway signs developers in through its own app registration | https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app |
 | **Privileged Role Administrator** or **Global Administrator**, for one step | The admin console reads users and roles through Microsoft Graph application permissions, which only these roles grant. When the installing account lacks the role, the install stops at its last stage and a person who holds it runs the commands of one step ([Run the install](#run-the-install)); in this project's installs the role was activated through Privileged Identity Management for the grant (docs/UNKNOWNS.md, U-75) | https://learn.microsoft.com/en-us/powershell/entra-powershell/grant-api-permissions-managed-identity |
-| A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:276) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
+| A subscription that can run Azure Container Registry Tasks, which build the two images; some trial and free-credit subscriptions cannot | `az acr build` builds the gateway and console images in Azure (infra/azure-test/deploy.mjs:279) | https://learn.microsoft.com/en-us/azure/container-registry/container-registry-tasks-overview |
 | A Microsoft Foundry account with Claude models deployed, in the same subscription and Entra tenant as the install, that accepts traffic from public networks, and whose endpoint subdomain is its name, as Foundry creates it | The gateway calls Claude through it with its managed identity, and names it by the account name (config/gateway.azure-test.yaml:36); the identity gets a role on that account (infra/azure-test/gateway-test.json:107-143) | https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/use-foundry-models-claude |
 | Optional: an existing resource group, for example the one that holds the Foundry account | `-UseExistingResourceGroup` installs into it; without the option the installer creates its own group | docs/adr/0018-existing-resource-group-preflight-and-database-first.md:1 |
 | For Intune onboarding: the Intune **Application Manager** role, and Windows devices joined or registered to Entra ID and enrolled in Intune | Intune installs the developer apps | https://learn.microsoft.com/en-us/intune/intune-service/fundamentals/role-based-access-control |
 
 Developers sign in with an e-mail address in the same domain as the account that runs the install, for example
-`contoso.com`; the gateway admits that one domain (config/gateway.azure-test.yaml:20; infra/azure-test/deploy.mjs:213).
+`contoso.com`; the gateway admits that one domain (config/gateway.azure-test.yaml:20; infra/azure-test/deploy.mjs:216).
 When the installing account's e-mail is in another domain, such as `contoso.onmicrosoft.com`, `-EmailDomain contoso.com`
 on the install command sets the developers' domain instead.
 
@@ -298,12 +298,12 @@ When a stage stops, the installer names it and the section of
 | `certificate sign-in did not work (...); falling back to a client secret` | The tenant refused a certificate on the app registration, for example by an app management policy (docs/UNKNOWNS.md, U-133). The install continues with a client secret of `-ClientSecretDays` days, 365 by default | Nothing for the install. To sign in with a certificate later, the tenant's policy is changed and the install command runs with `-SignInCredential certificate -Steps app` |
 | `Entra refused a client secret of 365 days` | The tenant's app management policy caps client secret lifetimes | The same install command with `-ClientSecretDays` at or under the tenant's limit, for example `-ClientSecretDays 30`; the renewal job renews it 30 days before it ends |
 | `the app registration holds certificate(s) ... not made by the installer` | Someone added a certificate to the gateway's app registration by hand. Microsoft Graph replaces all of an application's certificates at once, so the installer stops rather than remove it (infra/azure-test/lib/signin.mjs) | The certificate removed under **App registrations** > the gateway's registration > **Certificates & secrets**, then the same install command with `-Steps app` |
-| `the signed-in user has no mail address; the gateway admits email domain ...` | The installing account has no e-mail address in Entra ID, as in many trial tenants, so the installer takes the domain of the sign-in name (infra/azure-test/lib/plan.mjs:371) | Nothing when developers sign in with names in that domain. When their e-mail addresses are in another domain, the same install command with `-EmailDomain` set to it, for example `-EmailDomain contoso.com`. When developers have no e-mail address either, also `"emailClaim": "preferred_username"` under `deployment` in the admin file (docs/UNKNOWNS.md, U-81) |
+| `preflight` prints `FAIL  sign-in: the installing account ... has no e-mail address` | The installing account has no e-mail address in Entra ID, as in many trial tenants, so its ID token has no `email` claim and the gateway would refuse its sign-in with `id_token missing email claim` (seen on 2026-11-04) | `"emailClaim": "preferred_username"` added under `deployment` in the admin file, so the gateway reads the sign-in name, then the same install command. The `entra` stage then admits the sign-in name's domain; when developers' names are in another domain, `-EmailDomain` sets it, for example `-EmailDomain contoso.com` (docs/UNKNOWNS.md, U-81) |
 
 Every stage can run again: a stage that already ran finds its resources and changes only what differs
 (docs/adr/0009-a-staged-installer-over-the-existing-deploy-scripts.md:1). After the admin console has saved the
 gateway's configuration, the `app` stage keeps the console's configuration and prints `the admin console saved this
-gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:327-329); models,
+gateway's configuration; the app step keeps it and does not deploy <file>` (infra/azure-test/deploy.mjs:330-332); models,
 roles and policies are then changed in the console. A later run names its stages with `-Steps`, such as `-Steps app` or
 `-Steps admin-ui`, and keeps the recorded address choice unless `-TesterCidr` or `-AllowedCidr` changes it: the `budgets` stage sets the spend caps from
 the admin file again, replacing caps changed in the console
@@ -325,13 +325,13 @@ docs/adr/0011-admin-ui-is-admin-only-with-sign-in.md:1). Its pages are described
 | **AdminUi.Admin is required** | The account is assigned to the sign-in application without the `AdminUi.Admin` role; the same command assigns the role |
 | **Need admin approval** | The tenant stops user consent; an Application Administrator grants it as in [Give developers access](#give-developers-access) |
 
-The installing account already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:250), so the gateway can be
+The installing account already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:253), so the gateway can be
 checked end to end before any developer is onboarded: [Onboard developers](#onboard-developers), the `new-client-policy.mjs` command and
 [One machine](#one-machine), on this machine when it runs Windows, then [Check that it works](#check-that-it-works).
 
 ## Give developers access
 
-The account that ran the install already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:250). On the console's
+The account that ran the install already holds `Gateway.Standard` (infra/azure-test/deploy.mjs:253). On the console's
 **Developers** page, a user principal name and a role, `Gateway.Standard` or `Gateway.Premium`, then
 **Grant role** gives a developer access (docs/learn/how-to-use-admin-console.md:59). The role decides the models and
 whether Claude Desktop is available, as the admin file's `policies` set them. For a group of developers, the

@@ -158,3 +158,15 @@ test('T-158 code review: with Microsoft.DBforPostgreSQL not registered, the regi
   assert.match(r.lines.join('\n'), /WARN +database region eastus: not checked/);
   assert.deepEqual(r.databaseRegions, ['eastus', 'centralus'], 'tried in order by the base stage, which registers the provider first');
 });
+test('T-158 live finding 2026-11-04: an installing account with no e-mail address and no deployment.emailClaim fails preflight, naming the fix', async () => {
+  const base = { arm: fakeArm(ROUTES).arm, ...INPUT };
+  const noMail = await runPreflight({ ...base, signedIn: { mail: null, upn: 'admin@contoso.example' }, emailClaim: undefined });
+  assert.equal(noMail.ok, false);
+  assert.match(noMail.lines.join('\n'), /FAIL +sign-in: .*admin@contoso\.example has no e-mail address.*"emailClaim": "preferred_username"/);
+  const fixed = await runPreflight({ ...base, signedIn: { mail: null, upn: 'admin@contoso.example' }, emailClaim: 'preferred_username' });
+  assert.equal(fixed.ok, true, fixed.lines.join('\n'));
+  assert.match(fixed.lines.join('\n'), /PASS +sign-in: the gateway reads preferred_username/);
+  const withMail = await runPreflight({ ...base, signedIn: { mail: 'admin@contoso.example', upn: 'admin@contoso.example' } });
+  assert.equal(withMail.ok, true);
+  assert.match(withMail.lines.join('\n'), /PASS +sign-in: the gateway reads the email claim/);
+});

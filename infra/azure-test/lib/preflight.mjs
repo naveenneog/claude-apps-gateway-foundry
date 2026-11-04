@@ -51,7 +51,7 @@ const line = (level, text) => `${level.padEnd(5)} ${text}`;
  * Runs every check and returns { ok, lines, databaseRegions } without changing anything. databaseRegions lists, in
  * order, the regions the database step may try.
  */
-export async function runPreflight({ arm, subscriptionPath, groupPath, group, state = {}, useExisting = false, location, foundry, models = [], database, databaseOption }) {
+export async function runPreflight({ arm, subscriptionPath, groupPath, group, state = {}, useExisting = false, location, foundry, models = [], database, databaseOption, signedIn, emailClaim }) {
   const lines = [];
   let ok = true;
   const pass = (t) => lines.push(line('PASS', t));
@@ -81,6 +81,14 @@ export async function runPreflight({ arm, subscriptionPath, groupPath, group, st
       if (missing.length) fail(`Foundry account ${foundry.account}: no deployment named ${missing.join(', ')}; create it in Foundry or change models[].deployment in the admin file`);
       else pass(`Foundry account ${foundry.account}: holds ${[...new Set(models.map((m) => m.deployment))].join(', ') || 'the account (no models listed)'}`);
     }
+  }
+
+  // Live finding 2026-11-04: an account with no e-mail address has no email claim in its ID token, so the gateway
+  // refuses its sign-in ("id_token missing email claim") unless oidc.email_claim reads another claim.
+  if (signedIn) {
+    if (emailClaim) pass(`sign-in: the gateway reads ${emailClaim} as each person's e-mail (deployment.emailClaim)`);
+    else if (signedIn.mail) pass('sign-in: the gateway reads the email claim; the installing account has an e-mail address');
+    else fail(`sign-in: the installing account ${signedIn.upn} has no e-mail address in Entra ID, so the gateway would refuse its sign-in; add "emailClaim": "preferred_username" under deployment in the admin file, so the gateway reads the sign-in name`);
   }
 
   const usable = [];

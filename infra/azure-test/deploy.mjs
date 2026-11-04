@@ -165,12 +165,15 @@ async function stepBase(ctx) {
 // The database the rendered configuration names (ADR-0012); sidecar when --config is not there yet.
 const configuredDatabase = (ctx) => (fs.existsSync(path.resolve(ctx.opts.config)) ? databaseOf(fs.readFileSync(path.resolve(ctx.opts.config), 'utf8')) : 'sidecar');
 
+const signedInUser = async () => { const me = (await graph('GET', '/me?$select=mail,userPrincipalName')).json; return { mail: me.mail, upn: me.userPrincipalName }; };
+
 async function preflightInput(ctx) {
   const admin = ctx.opts.admin ? JSON.parse(fs.readFileSync(path.resolve(ctx.opts.admin), 'utf8')) : {};
   return { arm, subscriptionPath: `/subscriptions/${ctx.state.subscriptionId}`, groupPath: ctx.groupPath, group: ctx.group, state: ctx.state,
     useExisting: ctx.opts['use-existing-resource-group'], location: ctx.opts.location, models: admin.models ?? [],
     foundry: { resourceGroup: ctx.opts['foundry-resource-group'], account: ctx.opts['foundry-account'] },
-    database: admin.deployment?.database ?? configuredDatabase(ctx), databaseOption: ctx.opts['database-location'] };
+    database: admin.deployment?.database ?? configuredDatabase(ctx), databaseOption: ctx.opts['database-location'],
+    emailClaim: admin.deployment?.emailClaim, signedIn: ctx.opts.admin ? await signedInUser() : undefined };
 }
 
 // ADR-0018: read-only; prints one line per check and stops the install on a failure.
@@ -211,7 +214,7 @@ async function stepEntra(ctx) {
   const manifest = JSON.parse(fs.readFileSync(MANIFEST, 'utf8'));
   const me = (await graph('GET', '/me?$select=id,mail,userPrincipalName')).json;
   const email = emailDomainFor({ option: ctx.opts['email-domain'], mail: me.mail, upn: me.userPrincipalName });
-  if (email.from === 'userPrincipalName') say(`the signed-in user has no mail address; the gateway admits email domain ${email.domain}, from the sign-in name. Pass -EmailDomain to choose another`);
+  if (email.from === 'userPrincipalName') say(`the signed-in user has no mail address; the gateway admits email domain ${email.domain}, from the sign-in name (pass -EmailDomain to choose another). Accounts with no mail address also need "emailClaim": "preferred_username" under deployment in the admin file`);
   ctx.state.tester = { objectId: me.id, emailDomain: email.domain };
   const redirectUri = redirectUriFor(ctx.state.gatewayFqdn);
   const tags = [PURPOSE, `runId:${ctx.state.runId}`];
