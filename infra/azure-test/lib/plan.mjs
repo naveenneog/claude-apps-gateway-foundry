@@ -1,6 +1,6 @@
 // Pure helpers for the Azure test deployment (docs/adr/0003-*.md): address ranges, the app registration
 // body, secret generation, ARM request bodies and gateway config variables. No network or file access.
-import { randomBytes as cryptoRandomBytes } from 'node:crypto';
+import { createHash, randomBytes as cryptoRandomBytes } from 'node:crypto';
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const CIDR = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/;
@@ -165,17 +165,21 @@ export function unmanagedAppSettings(live, template) {
     ...live.gatewayEnv.filter((n) => !own.env.includes(n)).map((n) => `environment variable ${n}`)];
 }
 
-// ADR-0010: once admin-ui has saved, the app holds the admin file as the gateway-admin-file secret and a CONFIG_UPDATED_AT
-// stamp on the gateway container. The app step then deploys both, and the configuration the console saved, so a redeploy
-// neither deletes nor overwrites the console's work. The template is unchanged until then.
+// The gateway reads the secret-mounted YAML only at startup. A secret update alone starts no revision, so the hash of
+// the rendered config is also placed in CONFIG_UPDATED_AT: a changed config starts a revision, an unchanged one does not.
+export const configRevision = (yaml) => createHash('sha256').update(yaml).digest('hex');
+
+// ADR-0010: once admin-ui has saved, the app holds the admin file as the gateway-admin-file secret. The app stage
+// redeploys that secret and the saved config together, so it neither deletes nor overwrites the console's work.
 export function templateForConsole(template, owned) {
-  if (!owned) return template;
   const t = structuredClone(template);
-  t.parameters.gatewayAdminFile = { type: 'securestring', defaultValue: '' };
   t.parameters.configUpdatedAt = { type: 'string', defaultValue: '' };
   const app = t.resources.find((r) => r.type === 'Microsoft.App/containerApps');
-  app.properties.configuration.secrets.push({ name: 'gateway-admin-file', value: "[parameters('gatewayAdminFile')]" });
   app.properties.template.containers.find((c) => c.name === 'gateway').env.push({ name: 'CONFIG_UPDATED_AT', value: "[parameters('configUpdatedAt')]" });
+  if (owned) {
+    t.parameters.gatewayAdminFile = { type: 'securestring', defaultValue: '' };
+    app.properties.configuration.secrets.push({ name: 'gateway-admin-file', value: "[parameters('gatewayAdminFile')]" });
+  }
   return t;
 }
 

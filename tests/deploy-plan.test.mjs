@@ -303,11 +303,15 @@ const miniTemplate = () => ({ resources: [
 test('P-39 after an admin-ui save, the app step keeps the gateway-admin-file secret and CONFIG_UPDATED_AT instead of refusing (ADR-0010)', () => {
   const t = JSON.parse(fs.readFileSync(new URL('../infra/azure-test/gateway-test.json', import.meta.url), 'utf8'));
   const before = structuredClone(t);
-  assert.deepEqual(templateForConsole(t, false), before);
+  const unowned = templateForConsole(t, false);
+  assert.deepEqual(t, before, 'the input template is not changed');
+  assert.equal(unowned.parameters.gatewayAdminFile, undefined);
+  assert.equal(unowned.parameters.configUpdatedAt.type, 'string');
+  assert.equal(unowned.resources.find((r) => r.type === 'Microsoft.App/containerApps').properties.configuration.secrets.some((s) => s.name === 'gateway-admin-file'), false);
   const owned = templateForConsole(t, true);
   assert.deepEqual(t, before, 'the input template is not changed');
   const saved = { secretNames: ['jwt-secret', 'gateway-config', 'gateway-admin-file'], gatewayEnv: ['AZURE_CLIENT_ID', 'CONFIG_UPDATED_AT'] };
-  assert.deepEqual(unmanagedAppSettings(saved, t), ['secret gateway-admin-file', 'environment variable CONFIG_UPDATED_AT'], 'the template alone would delete them');
+  assert.deepEqual(unmanagedAppSettings(saved, unowned), ['secret gateway-admin-file'], 'the template owns CONFIG_UPDATED_AT, not the console secret');
   assert.deepEqual(unmanagedAppSettings(saved, owned), []);
   assert.deepEqual(unmanagedAppSettings({ ...saved, secretNames: [...saved.secretNames, 'azure-client-secret-crosstenant'] }, owned),
     ['secret azure-client-secret-crosstenant'], 'a secret added by hand is still refused');

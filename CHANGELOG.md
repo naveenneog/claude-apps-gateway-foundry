@@ -18,6 +18,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - The installer leaves the gateway and the admin console open to every address unless told otherwise (P-47, ADR-0017). Access still needs Entra sign-in: a gateway app role for the gateway, `AdminUi.Admin` for the console. `-TesterCidr` limits the gateway and `-AllowedCidr` the console, each on its own; `-NoSignIn` still requires a range. An install made before this change keeps its recorded range, and `-GatewayAllowAnyAddress`/`-ConsoleAllowAnyAddress` reopen it. Verified that the gateway accepts `0.0.0.0/0` in `access_control.allow_cidrs` (U-134).
 
 ### Fixed
+- The gateway app stage now sets a stable SHA-256 of the rendered YAML in `CONFIG_UPDATED_AT`, even before admin-ui has saved. Container Apps does not start a revision for a secret-only change, so the marker starts a revision when config changes and stays stable when it does not. Confirmed live: the `email_claim: preferred_username` secret was present but the old revision still refused sign-in; the new revision loaded it and `session.mint` succeeded (T-164).
 - The installer no longer stops when Azure answers a status check with a temporary error, such as the `503` an install's `app` stage got on 2026-11-03 while its deployment kept running: reads to Azure Resource Manager and Microsoft Graph are retried on 429, 500, 502, 503 and 504, honouring `Retry-After`; writes are never repeated (T-149). The tutorial's stops table says how to resume an install that stopped this way.
 
 ### Added

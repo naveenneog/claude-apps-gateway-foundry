@@ -247,7 +247,8 @@ database regions. They print one line each; a `FAIL` line names what to change b
 [deploy] preflight: WARN  database region eastus2: Burstable Standard_B1ms is not offered; skipped
 [deploy] preflight: PASS  database region centralus: PostgreSQL 16, Burstable Standard_B1ms offered
 [deploy] preflight: passed; nothing was changed
-```n
+```
+
 The output ends with:
 
 ```output

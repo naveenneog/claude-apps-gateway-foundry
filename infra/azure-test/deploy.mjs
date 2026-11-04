@@ -15,7 +15,7 @@ import { arm, graph, retry, runDeployment, validateDeployment, whatIfDeployment 
 import {
   buildApplication, ingressRange, deployWithPreview, deploymentBody, promotionError, redirectUriFor,
   restoredByDeployment, secretDays, credentialMonths, emailDomainFor, stateFromOutputs, supersededKeys, unsetConfigVariables, whatIfLines, newSecret, databaseRegions,
-  withFoundryTarget, databaseOf, databasePassword, templateForDatabase, templateForDatabaseFirst, templateForConsole, consoleConfig,
+  withFoundryTarget, databaseOf, databasePassword, configRevision, templateForDatabase, templateForDatabaseFirst, templateForConsole, consoleConfig,
 } from './lib/plan.mjs';
 import { appSecrets, finishCredential, liveApp, ownKeyName, passwordCredentials, removeKeys } from './lib/credentials.mjs';
 import { templateForCredential } from './lib/signin.mjs';
@@ -97,6 +97,7 @@ export async function deployTemplate(ctx, { databaseFirst = false, credential = 
     foundryResourceGroup: ctx.opts['foundry-resource-group'],
     foundryAccountName: ctx.opts['foundry-account'],
     ...parameters,
+    configUpdatedAt: parameters.configUpdatedAt ?? configRevision(parameters.gatewayConfigYaml ?? ''),
     database,
   });
   const name = databaseFirst ? 'claude-gw-db' : parameters.deployApp ? 'claude-gw-app' : 'claude-gw-base';
@@ -355,7 +356,8 @@ async function stepApp(ctx) {
     postgresPassword: database === 'managed' ? databasePassword(secrets.pg) : secrets.pg,
     gatewayAdminWriteKey: secrets.admin,
     gatewayAdminPacerKey: secrets.pacer,
-    ...(saved ? { gatewayAdminFile: saved.adminFile, configUpdatedAt: saved.stamp } : {}),
+    configUpdatedAt: configRevision(gatewayConfigYaml),
+    ...(saved ? { gatewayAdminFile: saved.adminFile } : {}),
   });
   if (!out) return;
   if (database === 'managed') await finishDatabase({ arm, ctx, out, databaseLocation, save: () => saveState(ctx), say });

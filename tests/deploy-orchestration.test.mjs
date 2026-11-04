@@ -81,7 +81,9 @@ test('P-39 deployTemplate deploys the admin-ui secret and stamp only when the ap
     await deployTemplate(ctx, { deployApp: true, ...parameters }, io);
     const app = bodies[0].properties.template.resources.find((r) => r.type === 'Microsoft.App/containerApps');
     assert.equal(app.properties.configuration.secrets.some((x) => x.name === 'gateway-admin-file'), expected);
-    assert.equal(app.properties.template.containers.find((c) => c.name === 'gateway').env.some((e) => e.name === 'CONFIG_UPDATED_AT'), expected);
+    const stamp = app.properties.template.containers.find((c) => c.name === 'gateway').env.find((e) => e.name === 'CONFIG_UPDATED_AT');
+    assert.deepEqual(stamp, { name: 'CONFIG_UPDATED_AT', value: "[parameters('configUpdatedAt')]" });
+    assert.ok(bodies[0].properties.parameters.configUpdatedAt.value);
     assert.equal(bodies[0].properties.parameters.gatewayAdminFile?.value, parameters.gatewayAdminFile);
   }
 });
@@ -98,4 +100,20 @@ test('T-159 deployTemplate with databaseFirst deploys only the PostgreSQL resour
   assert.equal(parameters.databaseLocation.value, 'centralus');
   assert.equal(ctx.state.acrName, undefined, 'the base outputs are not expected from this deployment');
   assert.deepEqual(calls, ['validate', 'whatIf', 'save', 'run']);
+});
+test('T-164 changing gatewayConfigYaml changes CONFIG_UPDATED_AT and starts a revision even without an admin-ui save', async () => {
+  const marker = async (yaml) => {
+    const { ctx, io } = harness({ whatIf: true });
+    io.validateDeployment = async (_g, _n, body) => { io.last = { body: JSON.parse(body) }; };
+    await deployTemplate(ctx, { deployApp: true, credential: 'certificate', gatewayConfigYaml: yaml, oidcCertificatePem: 'pem' }, io);
+    const p = io.last.body.properties.parameters.configUpdatedAt?.value;
+    const env = io.last.body.properties.template.resources.find((r) => r.type === 'Microsoft.App/containerApps').properties.template.containers
+      .find((c) => c.name === 'gateway').env.find((e) => e.name === 'CONFIG_UPDATED_AT')?.value;
+    assert.ok(p, 'a config marker is a template parameter');
+    assert.equal(env, "[parameters('configUpdatedAt')]", 'the marker is on the gateway container and starts a revision');
+    return p;
+  };
+  const a = await marker('oidc:\n  issuer: https://id.example\n');
+  assert.equal(await marker('oidc:\n  issuer: https://id.example\n'), a, 'same config has the same marker');
+  assert.notEqual(await marker('oidc:\n  issuer: https://login.example\n'), a, 'changed config has a different marker');
 });
