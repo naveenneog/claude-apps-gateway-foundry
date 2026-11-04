@@ -139,13 +139,14 @@ const settingsPage = (() => {
     const managed = plan.managedSettings;
     const claudeCode = plan.claudeCode === 'profile'
       ? [
-        el('h3', { text: 'Claude Code and VS Code: the gateway profile' }),
+        el('h3', { text: 'Claude Code: the gateway profile' }),
         ui.banner('info', [plan.reason]),
         el('p', { text: 'Give each developer the developer folder of the client kit above, or deploy the intune folder to many machines as two Win32 apps (Claude Code, then the profile). On the developer machine, in the developer folder:' }),
         plan.profileCommand
           ? el('pre', { class: 'code-block' }, [el('code', { text: `${plan.profileCommand}\n` })])
           : ui.banner('warning', 'The gateway URL is not available from the Container App ingress. Ask the gateway administrator for the client URL.'),
         el('p', { text: 'The command opens a browser for Microsoft Entra sign-in, then claude-gateway.cmd in the profile folder starts Claude Code through the gateway.' }),
+        el('p', { text: 'The launcher also runs in the VS Code integrated terminal (Terminal > New Terminal).' }),
       ]
       : [
         el('h3', { text: 'Claude Code and VS Code: managed login' }),
@@ -162,6 +163,7 @@ const settingsPage = (() => {
       el('p', { text: 'Give each developer a gateway role on the Access & models page. The role decides the models and whether Claude Desktop/Cowork is available.' }),
       ...clientKitSection(config),
       ...claudeCode,
+      el('p', { text: 'The VS Code extension side panel includes its own Claude Code command-line tool; whether it reuses a CLI gateway sign-in has not been verified.' }),
       el('h3', { text: 'Claude Desktop and Cowork' }),
       el('p', { text: `These clients use a separate machine policy: HKLM\\SOFTWARE\\Policies\\Claude\\bootstrapUrl set to ${plan.desktopBootstrapUrl ?? '<gateway-url>/user/bootstrap'}. Import ClaudeDesktop-HKLM.reg on one machine, or run Set-ClaudeDesktopPolicy.ps1 as an Intune platform script in the 64-bit PowerShell host. Desktop sign-in is separate; the assigned gateway role must include Desktop access.` }),
       el('p', { text: 'Step-by-step guide, Intune included: the Help page, or docs/learn/tutorial-first-install.md in the gateway repository, section "Onboard developers".' }),

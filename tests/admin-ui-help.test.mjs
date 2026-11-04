@@ -66,3 +66,42 @@ test('T-125 Settings renders the client kit downloads', () => {
   assert.match(page, /settingsView\.clientKit\(/);
   assert.match(page, /Download client kit/);
 });
+
+test('T-125 Client onboarding distinguishes the VS Code terminal from the extension panel', async () => {
+  const el = (tag, attrs = {}, children = []) => ({
+    tag, attrs, children, style: { setProperty() {} }, addEventListener() {},
+    replaceChildren(...items) { this.children = items; },
+  });
+  for (const topology of ['test', 'private']) {
+    const data = {
+      '/api/me': { signIn: 'off' },
+      '/api/capabilities': { items: [] },
+      '/api/gateway-config': { topology, gateway: { url: 'https://gateway.contoso.example' } },
+    };
+    const ui = {
+      button: (text) => el('button', { text }),
+      pageHeader: ({ title }) => el('header', { text: title }),
+      skeleton: () => el('skeleton'),
+      loading: () => el('loading'),
+      settle: (promise) => promise,
+      shared: async (url) => data[url],
+      card: ({ title, content }) => el('card', { text: title }, Array.isArray(content) ? content : [content]),
+      banner: (kind, content) => el('banner', { kind, text: Array.isArray(content) ? content.join(' ') : content }),
+      pill: (text) => el('pill', { text }),
+      icon: () => el('icon'),
+    };
+    const context = vm.createContext({ URL, el, ui, api: { get: async () => ({ mode: 'certificate' }) } });
+    vm.runInContext(read('settings-view.js'), context);
+    vm.runInContext(`${read('settings-page.js')}\nglobalThis.testPage = settingsPage;`, context);
+    const root = el('root');
+    await context.testPage.render({ root, active: () => true });
+    const rendered = JSON.stringify(root);
+    assert.ok(/VS Code extension (?:side )?panel[^.!?]{0,200}not been verified/i.test(rendered),
+      `${topology}: the rendered card states that extension session reuse is unverified`);
+    if (topology === 'test') {
+      assert.ok(/VS Code integrated terminal/i.test(rendered), 'the public profile can be launched in the terminal');
+      assert.ok(!rendered.includes('Claude Code and VS Code: the gateway profile'),
+        'the heading does not imply the profile configures the extension panel');
+    }
+  }
+});

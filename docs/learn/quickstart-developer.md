@@ -103,6 +103,13 @@ a repository's settings then sent the token to another host (docs/UNKNOWNS.md:61
    PONG
    ```
 
+### Use the VS Code terminal
+
+In VS Code, select **Terminal** > **New Terminal**, choose PowerShell and run the launcher above in the
+VS Code integrated terminal. This starts Claude Code in a terminal, not the extension's chat panel.
+The VS Code extension side panel bundles its own CLI; whether it reuses this profile's gateway sign-in has not been
+verified ([VS Code extension](https://code.claude.com/docs/en/vs-code#prerequisites); [U-21](../UNKNOWNS.md)).
+
 ## Clean up resources
 
 1. Sign out. The script sends both tokens to the gateway's revocation endpoint when the gateway advertises one, as a

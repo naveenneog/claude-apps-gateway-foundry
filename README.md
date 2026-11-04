@@ -25,11 +25,23 @@ including the comparison with the Azure API Management (APIM) gateway.
 
 The first tutorial needs Owner on an Azure subscription, a Microsoft Foundry account with Claude models deployed, and
 PowerShell 7, Node.js 22, the Azure CLI and Git on the machine that runs it; its "Before you begin" section lists each
-role and why. Developer machines run Windows. The gateway and the console accept connections from any network and admit only people
-signed in with Microsoft Entra ID who hold a gateway role (ADR-0017); `-TesterCidr` and `-AllowedCidr` limit them to one
-address block. The gateway signs in to Entra with its own certificate, renewed daily by a job, so no client secret is
-renewed by hand (ADR-0016). Claude Desktop through this gateway was tested on
-2026-10-26 (docs/UNKNOWNS.md, U-106). Not yet tested: an Intune assignment in a real tenant (docs/UNKNOWNS.md, U-107).
+role and why. Developer machines run Windows. In a new test-topology install, the gateway and console accept
+connections from any network unless `-TesterCidr` or `-AllowedCidr` limits their addresses. Existing installs keep
+their recorded restrictions. The gateway requires Microsoft Entra sign-in and a gateway role; the console requires
+its own `AdminUi.Admin` role (ADR-0017).
+
+A new test-topology install uses a self-signed certificate, valid for 12 months by default, for the gateway's Entra
+sign-in. Its private key and certificate are stored in the gateway's Container Apps secret `oidc-certificate`, not in
+Key Vault. After the `admin-ui` stage completes, a daily job checks whether renewal is needed. A client secret is a
+possible fallback; the
+[credential section](docs/learn/tutorial-first-install.md#check-the-gateways-sign-in-credential) explains the
+exceptions, storage access and production consideration (ADR-0016).
+
+The Claude Code launcher also runs in the VS Code integrated terminal. The VS Code extension side panel's reuse of the
+gateway sign-in has not been verified (docs/UNKNOWNS.md, U-21). On an earlier public gateway, Claude Desktop signed
+in and a Claude model answered a prompt. Desktop and a real Claude model answering a prompt have not been verified on
+the latest certificate test gateway (docs/UNKNOWNS.md, U-106; docs/TEST-PLAN.md, T-155). The Intune packages were
+tested locally, but assignment in an Intune tenant has not been tested (docs/UNKNOWNS.md, U-107).
 
 ## Start the deployment
 

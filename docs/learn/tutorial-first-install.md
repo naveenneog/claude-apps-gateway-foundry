@@ -19,8 +19,11 @@ At the end of this tutorial:
 
 - The gateway runs on Azure Container Apps and accepts connections from any network. Only people who sign in with
   Microsoft Entra ID and hold a gateway role can use it (docs/adr/0017-installer-option-to-allow-any-address.md:1).
-- The gateway signs in to Entra with its own certificate, which a daily job renews; there is no client secret to renew
-  by hand (docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1).
+- A new test-topology install uses a self-signed certificate for the gateway's Entra sign-in. Its private key and
+  certificate are in the Container Apps secret `oidc-certificate`, not in Key Vault. After the `admin-ui` stage
+  completes its permissions, a daily job checks whether it needs renewal; a client secret is a possible fallback.
+  [Where the credential is stored and renewed](#check-the-gateways-sign-in-credential) has the details
+  (docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1).
 - Spend, spend caps and chargeback data are kept in Azure Database for PostgreSQL, with 35 days of point-in-time
   restore (docs/adr/0012-test-topology-database-choice.md:50).
 - The admin console opens only for the people named at install (docs/adr/0011-admin-ui-is-admin-only-with-sign-in.md:1).
@@ -376,12 +379,21 @@ profile instead: a separate Claude Code profile that signs in to the gateway onc
 it, without administrator rights and without changing the developer's own Claude Code settings
 (docs/adr/0004-operator-and-developer-tooling.md:15-17).
 
-One command writes everything the developer machines need, from the gateway address the install printed. `--model`
-and `--fast-model` take a model `id` from the admin file that every developer's role allows; in the example that is
-`claude-sonnet-5`, the one model of `Gateway.Standard` (config/gateway-admin.example.json:10):
+> [!NOTE]
+> **Pilot status:** On 2026-11-04, browser sign-in succeeded on the certificate test gateway. That gateway used a
+> stand-in Foundry deployment (a placeholder, not a Claude model), so real Claude inference (a model answering a
+> prompt) on it has not been verified ([sign-in test T-155](../TEST-PLAN.md)). Claude Desktop sign-in and inference
+> worked on an earlier public gateway, not on this certificate test gateway ([Desktop test U-106](../UNKNOWNS.md)).
+> The Intune packages were tested locally, but assignment has not been verified in an Intune tenant
+> ([U-107](../UNKNOWNS.md)). For a wider rollout, test a real Claude model and each intended client with a pilot user.
+
+One command writes everything the developer machines need. `https://gateway.contoso.example` is an example; the
+gateway address the install printed, including `https://`, goes in its place. `--model` and `--fast-model` take a
+model `id` from the admin file that every developer's role allows; in the example that is `claude-sonnet-5`, the one
+model of `Gateway.Standard` (config/gateway-admin.example.json:10):
 
 ```powershell
-node scripts/admin/new-client-policy.mjs --gateway-url https://ca-claude-gw.<environment>.eastus2.azurecontainerapps.io --fast-model claude-sonnet-5 --model claude-sonnet-5 --out .\client-policy
+node scripts/admin/new-client-policy.mjs --gateway-url https://gateway.contoso.example --fast-model claude-sonnet-5 --model claude-sonnet-5 --out .\client-policy
 ```
 
 ```output
@@ -411,13 +423,18 @@ steps use.
 ### One machine
 
 The administrator gives the developer the `client-policy\developer` folder, for example as a zip file on a file share;
-it holds the scripts and `START-HERE.txt`, the same steps in plain text. The developer needs Claude Code, and, when the install set `-TesterCidr`, a network inside that block: `winget install Anthropic.ClaudeCode` installs it, after which a new Windows PowerShell window finds
-the `claude` command ([set up Claude Code](https://code.claude.com/docs/en/setup)). In Windows PowerShell, in the
-folder:
+it holds the scripts and `START-HERE.txt`, the same steps in plain text. The developer needs Claude Code, and, when
+the install set `-TesterCidr`, a network inside that block. `winget install Anthropic.ClaudeCode` installs Claude Code;
+a new Windows PowerShell window then finds the `claude` command
+([set up Claude Code](https://code.claude.com/docs/en/setup)).
+
+In Windows PowerShell, `C:\path\to\developer` is an example; the folder the administrator gave you goes there.
+The gateway address and model are examples too: the administrator supplies the address and a model that your role
+allows. With those values in place, the commands are:
 
 ```powershell
-Set-Location <folder that holds Install-ClaudeGatewayProfile.ps1>
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-ClaudeGatewayProfile.ps1 -GatewayUrl https://ca-claude-gw.<environment>.eastus2.azurecontainerapps.io -FastModel claude-sonnet-5 -Model claude-sonnet-5
+Set-Location "C:\path\to\developer"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-ClaudeGatewayProfile.ps1 -GatewayUrl https://gateway.contoso.example -FastModel claude-sonnet-5 -Model claude-sonnet-5
 ```
 
 The browser opens the gateway's page with a code; the developer checks that it matches the code PowerShell shows,
@@ -425,7 +442,7 @@ confirms it and signs in with the work account. Back in PowerShell, the script n
 session; **Y** keeps it (scripts/developer/Connect-ClaudeGateway.ps1:63-79):
 
 ```output
-Signed in to https://ca-claude-gw.<environment>.eastus2.azurecontainerapps.io as dev@contoso.com. Get-ClaudeGatewayToken.ps1 now serves tokens for this gateway.
+Signed in to https://gateway.contoso.example as dev@contoso.com. Get-ClaudeGatewayToken.ps1 now serves tokens for this gateway.
 ```
 
 `-Model` sets the model Claude Code asks for, and `-FastModel` the one for background tasks; both are models the
@@ -438,6 +455,16 @@ From then on the launcher starts Claude Code through the gateway:
 ```powershell
 & "$env:USERPROFILE\.claude-apps-gateway\claude-gateway.cmd"
 ```
+
+The profile is in `%USERPROFILE%\.claude-apps-gateway`. The saved sign-in session is encrypted for that Windows user
+under `%LOCALAPPDATA%\ClaudeAppsGateway\sessions`; the helper refreshes its token automatically. Starting the launcher
+does not require another browser sign-in each time. The developer signs in again if the gateway no longer accepts the
+refresh token ([Quickstart: connect Claude Code on Windows](quickstart-developer.md)).
+
+In VS Code, choose **Terminal** > **New Terminal**, select PowerShell and run the same launcher command in the
+VS Code integrated terminal. This starts Claude Code in the terminal. The VS Code extension side panel bundles its own
+CLI; whether it reuses the gateway profile's sign-in has not been verified
+([VS Code extension](https://code.claude.com/docs/en/vs-code#prerequisites); [U-21](../UNKNOWNS.md)).
 
 Each message the profile can show, and its fix, is in
 [Quickstart: connect Claude Code on Windows](quickstart-developer.md).
@@ -507,7 +534,7 @@ Intune shows the developer nothing, so the administrator sends each developer a 
 
 ```text
 Claude Code is installed on your PC and connects through the company gateway. You have been given access.
-On the company network, open Windows PowerShell and run once:
+On your Windows PC, open Windows PowerShell and run once:
   & "$env:USERPROFILE\.claude-apps-gateway\sign-in.cmd"
 Check that the code in the browser matches the one in PowerShell, sign in with your work account, and answer Y.
 From then on, start Claude Code with:
@@ -542,9 +569,9 @@ Claude Desktop reads the gateway address from the device policy `bootstrapUrl` u
 folder's `desktop` folder holds that script, `Set-ClaudeDesktopPolicy.ps1`, the same value as `ClaudeDesktop-HKLM.reg` for
 one machine, and `DESKTOP.txt` with each Intune setting, including **Run script in 64-bit PowerShell host**: **Yes**;
 the script stops with exit code 1 in a 32-bit host, which would write the value where Desktop does not read it
-(scripts/admin/desktop-policy.mjs:15-35). Desktop signs in to this public
-gateway with its own device code, separate from the Claude Code profile, for a developer whose role's policy turns
-Desktop on: `Gateway.Premium` in the example admin file (docs/UNKNOWNS.md, U-106). A role's Chat, Cowork and Code
+(scripts/admin/desktop-policy.mjs:15-35). Desktop signs in using its own device code, separate from the Claude Code
+profile, for a developer whose role's policy turns Desktop on: `Gateway.Premium` in the example admin file. Desktop
+sign-in and inference were tested on an earlier public gateway (docs/UNKNOWNS.md, U-106). A role's Chat, Cowork and Code
 switches are set with `desktopSettings` on its policy in the admin file
 ([configure models, roles and developer access](how-to-admin-configure.md#claude-desktop-chat-cowork-and-code)); Desktop
 applies the gateway's values over local settings.
@@ -584,19 +611,22 @@ Program Files, and App 2 as the developer, for example
 
 ### Package a newer Claude Code release
 
-Anthropic publishes each release's checksums in its manifest. This command prints the Windows checksum of a release:
+Anthropic publishes each release's checksums in its manifest. `2.1.290` is an example release; these commands save and
+print the chosen release's Windows checksum:
 
 ```powershell
-$version = '<release, for example 2.1.290>'
-(Invoke-RestMethod "https://downloads.claude.ai/claude-code-releases/$version/manifest.json").platforms.'win32-x64'.checksum
+$version = '2.1.290'
+$checksum = (Invoke-RestMethod "https://downloads.claude.ai/claude-code-releases/$version/manifest.json").platforms.'win32-x64'.checksum
+$checksum
 ```
 
 `new-client-policy.mjs` writes the Intune folder for that release with `--claude-version` and `--claude-checksum`
 (scripts/admin/new-client-policy.mjs:15), with the same gateway address and models as before and `--force` to write into
-the existing folder; without `--model` it warns, because the profile app would then pin no model:
+the existing folder; without `--model` it warns, because the profile app would then pin no model. The example URL is
+replaced with the gateway address:
 
 ```powershell
-node scripts/admin/new-client-policy.mjs --gateway-url https://ca-claude-gw.<environment>.eastus2.azurecontainerapps.io --fast-model claude-sonnet-5 --model claude-sonnet-5 --claude-version $version --claude-checksum <checksum> --out .\client-policy --force
+node scripts/admin/new-client-policy.mjs --gateway-url https://gateway.contoso.example --fast-model claude-sonnet-5 --model claude-sonnet-5 --claude-version $version --claude-checksum $checksum --out .\client-policy --force
 pwsh -File scripts/admin/New-IntunePackage.ps1 -PolicyFolder .\client-policy -ToolPath C:\tools\prep\Microsoft-Win32-Content-Prep-Tool-master\IntuneWinAppUtil.exe -OutputFolder .\intunewin
 ```
 
@@ -657,13 +687,27 @@ by then.
 
 ## Check the gateway's sign-in credential
 
-The gateway signs developers in through its app registration, and proves to Microsoft Entra ID that it is that
-application with a self-signed certificate the `app` stage made (infra/azure-test/lib/credentials.mjs:67). The
-certificate is valid for `-CredentialValidityMonths`, 12 months by default. Nobody renews it by hand:
+The gateway signs developers in through its app registration. To prove its own identity to Microsoft Entra ID, a new
+install uses a self-signed certificate made by the `app` stage, unless it falls back to a client secret
+(infra/azure-test/lib/credentials.mjs:67). This is the gateway's credential, not the developer's sign-in session.
+The certificate is valid for `-CredentialValidityMonths`, 12 months by default.
 
-- The console's job `job-signin-renewer` runs every day at 03:17 UTC and replaces the certificate 30 days before it
-  ends. It registers the new certificate next to the old one, starts a gateway revision that uses the new one, and
-  removes the old one once that revision is ready, so signed-in developers stay signed in
+The installer registers the public certificate on the Entra app registration. It stores the certificate and its
+private key together in the gateway's Container Apps secret `oidc-certificate`; the gateway reads it as
+`GATEWAY_IDP_PEM`. The credential is not in Azure Key Vault: this installer does not create or use a vault for it, and
+`-KeyVaultName` and `-CreateKeyVault` are not implemented
+(docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1).
+
+An identity with `Microsoft.App/containerApps/listSecrets/action` on the gateway can read its secret values. Microsoft
+recommends a Key Vault reference rather than a directly stored secret in production
+([Container Apps secrets](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets)). This test-topology
+installer does not provide that Key Vault option.
+
+Renewal works as follows:
+
+- The console's job `job-signin-renewer` runs every day at 03:17 UTC and replaces the certificate when fewer than
+  30 days remain. It registers the new certificate next to the old one, starts a gateway revision that uses the new
+  one, and removes the old one once that revision is ready, so signed-in developers stay signed in
   (admin-ui/server/signin-renewer.mjs:23;
   [rotate the client certificate](https://code.claude.com/docs/en/claude-apps-gateway-config#rotate-the-client-certificate)).
 - **Settings** > **Gateway sign-in credential** in the console shows the type, the certificate's thumbprint and its end
@@ -675,9 +719,15 @@ The certificate's thumbprint and end date are also under **App registrations** >
 **Certificates & secrets** in the Microsoft Entra admin center, and the gateway's log has a line
 `oidc: client authentication private_key_jwt; certificate CN=claude-gateway <resource group>, SHA-1 thumbprint <thumbprint>`.
 
-When the tenant refuses a certificate, the install uses a client secret of `-ClientSecretDays` days, 365 by default, and
-the same job renews it 30 days before it ends (docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1). The
-job runs with the console's identity, so it works once the Microsoft Graph grant of the `admin-ui` stage is in place.
+If certificate creation or registration fails, the default install may fall back to a client secret stored as the
+Container Apps secret `oidc-client-secret`. The secret is valid for `-ClientSecretDays` days, 365 by default. Some
+errors stop the install instead of falling back. With `-SignInCredential certificate`, errors stop the install instead
+of falling back; `-SignInCredential secret` selects a client secret. An existing install that already uses a client
+secret keeps that mode unless `-SignInCredential certificate` is given
+(docs/adr/0016-signin-certificate-in-key-vault-with-renewal-job.md:1).
+
+The same job renews a client secret when fewer than 30 days remain. The job and **Renew now** use the console's identity;
+renewal needs both the Microsoft Graph grant and app ownership from the `admin-ui` stage.
 
 ## Update the gateway's Claude Code release
 
