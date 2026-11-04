@@ -17,6 +17,7 @@ including the comparison with the Azure API Management (APIM) gateway.
 | Install the gateway on Azure for the first time, then onboard developers by hand or with Microsoft Intune | [Tutorial: install the gateway and onboard developers](docs/learn/tutorial-first-install.md) | One sitting; the install itself took about eight minutes on 2026-10-21 (docs/TEST-PLAN.md, T-91) |
 | Use Claude Code on a Windows machine through a gateway someone else installed | [Quickstart: connect Claude Code on Windows](docs/learn/quickstart-developer.md) | A few minutes |
 | Run a gateway that is already installed: models, access, budgets, chargeback | [Use the admin console](docs/learn/how-to-use-admin-console.md) | — |
+| Update the console without reinstalling the gateway or changing its database or sign-in | [Update an existing admin console](docs/learn/how-to-update-admin-console.md) | One image build and rollout |
 | Install a gateway with no public address, reached over VPN or ExpressRoute | [Tutorial: deploy in a network-restricted environment](docs/learn/tutorial-deploy-network-restricted.md) | Longer: it builds the network too |
 | Group developers into departments or cost centers for chargeback, or give a whole team access with an Entra group | [Group developers into departments and teams](docs/learn/how-to-organize-departments.md) | — |
 | Choose what Claude Desktop shows each role (Chat, Cowork, Code) | [Claude Desktop: Chat, Cowork and Code](docs/learn/how-to-admin-configure.md#claude-desktop-chat-cowork-and-code) | — |

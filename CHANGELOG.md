@@ -6,6 +6,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 ## [Unreleased]
 
 ### Added
+- `admin-ui\infra\Update-AdminUi.ps1` builds and rolls out only the existing console image, with a read-only `-Plan`,
+  settings-preservation checks and the previous image printed for rollback. It does not rerun Entra setup, change
+  gateway policies or reset database-backed caps (P-35, ADR-0019).
+- **Access & models > Desktop capabilities** provides per-role import/export, plugin upload, user-added marketplace,
+  skill creation and desktop-extension controls, alongside Chat, Cowork and Code. Unset values keep Desktop defaults;
+  enabling import does not enable automatic migration or install plugins (P-35, ADR-0019).
 - `-Plan` checks every prerequisite of a first install that can be read, before anything is built (T-163): Node.js 22 and Azure CLI 2.60 with the `containerapp` extension; the signed-in account's right to create the resource group and assign roles there and on the Foundry account; the Foundry account's public network access and endpoint name; the right to register the app in Entra ID, and, as a warning, the active Privileged Role Administrator the admin console's Microsoft Graph grant needs; and the resource providers the templates use.
 - Preflight checks the installing account's e-mail address: an account with none, as in many trial tenants, has no `email` claim in its ID token, and the gateway refuses its sign-in with `id_token missing email claim`, seen live on 2026-11-04. Preflight now stops with the fix, `"emailClaim": "preferred_username"` under `deployment` in the admin file.
 - The gateway signs in to Microsoft Entra ID with its own certificate instead of a client secret (P-45, ADR-0016 amended). The `app` stage makes a self-signed RSA 2048 certificate, valid for `-CredentialValidityMonths` (1 to 24, default 12), registers it on the gateway's app registration and removes the client secrets the installer made. The new daily job `job-signin-renewer` replaces it 30 days before it ends, in the gateway's rotation order, so developers stay signed in; **Settings** > **Gateway sign-in credential** in the console shows it and has **Renew now**. Some certificate creation or registration failures fall back to a client secret, now 1 to 365 days (`-ClientSecretDays`, default 365), which the same job renews; explicit certificate mode and some errors stop instead. Tested live on Contoso: Entra accepted the deployed certificate, refused an unregistered one with `AADSTS700027`, and a forced renewal took 57 seconds. The private key and certificate are stored as a Container Apps secret, not in Key Vault: the test tenant's policy forces vaults private, and data-plane calls from the installing machine failed (U-137). Whether a VNet-less Container Apps environment can resolve a private-only vault remains untested (ADR-0016 amendment).
@@ -19,6 +25,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - The installer leaves the gateway and the admin console open to every address unless told otherwise (P-47, ADR-0017). Access still needs Entra sign-in: a gateway app role for the gateway, `AdminUi.Admin` for the console. `-TesterCidr` limits the gateway and `-AllowedCidr` the console, each on its own; `-NoSignIn` still requires a range. An install made before this change keeps its recorded range, and `-GatewayAllowAnyAddress`/`-ConsoleAllowAnyAddress` reopen it. Verified that the gateway accepts `0.0.0.0/0` in `access_control.allow_cidrs` (U-134).
 
 ### Fixed
+- Console writes retain a same-origin Referer for Azure Authentication's CSRF check; cross-site requests remain
+  refused. The permissions display recognizes the gateway-level actions in Container Apps Contributor instead of
+  asking an administrator to grant the role again. User-cap guidance distinguishes gateway subjects from Entra
+  object IDs (P-35, ADR-0019).
+- A user-cap subject that the gateway has not recorded requires explicit confirmation, while email lookup continues
+  to resolve to the gateway subject. Console update preservation compares JSON structurally, so property ordering
+  does not produce a false failure.
+- Budget submission waits for its initial metadata, preventing a successful write followed by a misleading refresh
+  error. A synthesized actor returned for an unknown subject is not mistaken for a previously seen user.
 - The gateway app stage now sets a stable SHA-256 of the rendered YAML in `CONFIG_UPDATED_AT`, even before admin-ui has saved. Container Apps does not start a revision for a secret-only change, so the marker starts a revision when config changes and stays stable when it does not. Confirmed live: the `email_claim: preferred_username` secret was present but the old revision still refused sign-in; the new revision loaded it and `session.mint` succeeded (T-164).
 - The installer no longer stops when Azure answers a status check with a temporary error, such as the `503` an install's `app` stage got on 2026-11-03 while its deployment kept running: reads to Azure Resource Manager and Microsoft Graph are retried on 429, 500, 502, 503 and 504, honouring `Retry-After`; writes are never repeated (T-149). The tutorial's stops table says how to resume an install that stopped this way.
 

@@ -191,7 +191,7 @@ test('T-108 every response carries the security headers, and API responses are n
       assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval/, p);
       assert.equal(res.headers.get('x-content-type-options'), 'nosniff', p);
       assert.equal(res.headers.get('x-frame-options'), 'DENY', p);
-      assert.equal(res.headers.get('referrer-policy'), 'no-referrer', p);
+      assert.equal(res.headers.get('referrer-policy'), 'same-origin', `${p}: Azure Authentication needs the same-origin Referer (ADR-0019)`);
       await res.arrayBuffer();
     }
     assert.equal((await fetch(`http://127.0.0.1:${port}/api/health`)).headers.get('cache-control'), 'no-store');

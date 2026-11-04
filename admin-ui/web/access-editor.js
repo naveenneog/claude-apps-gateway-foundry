@@ -131,6 +131,30 @@ const accessEditor = (() => {
     });
   }
 
+  function desktop(s, act) {
+    const roles = orderedRoles(s.draft).filter((role) => cv().desktopOf(s.draft, role));
+    return ui.card({
+      title: 'Desktop capabilities',
+      description: 'Per-role controls delivered at Desktop sign-in. Default leaves the setting unset; the Desktop default applies. Review and apply changes as usual.',
+      content: [
+        el('p', { class: 'card-body muted', text: 'Imports can contain sensitive conversations. Plugins and extensions can run programs on the device. Enabling these options does not install plugins or approve tool calls, and does not enable automatic migration of earlier sessions.' }),
+        ...roles.map((role) => el('details', { class: 'card-body', open: true }, [
+          el('summary', { text: role }),
+          el('div', { class: 'form-grid' }, cv().desktopFields.map(([key, label]) => {
+            const value = cv().desktopSettingOf(s.draft, role, key);
+            const control = el('select', {
+              disabled: Boolean(s.readOnly), 'data-key': `desktop-setting|${role}|${key}`,
+              onchange: (event) => act.setDesktopSetting(role, key, event.currentTarget.value === 'default' ? null : event.currentTarget.value === 'true'),
+            }, [['default', 'Desktop default (unset)'], ['true', 'Enabled'], ['false', 'Disabled']].map(([choice, text]) =>
+              el('option', { value: choice, text, selected: choice === (value === null ? 'default' : String(value)) })));
+            return ui.field({ label: `${role}: ${label}`, control });
+          })),
+        ])),
+        ...(!roles.length ? [ui.empty('No Desktop-enabled roles', 'Enable Claude Desktop in Role access to configure its capabilities.')] : []),
+      ],
+    });
+  }
+
   function models(s, act) {
     const add = ui.button('Add model', { kind: 'secondary', size: 'sm', iconName: 'plus', disabled: Boolean(s.readOnly), 'data-key': 'add-model', onclick: () => modelDialog(s, null, act) });
     const whyIds = new Map(list(s.draft.models).map((m) => [m.id, ui.uid('why')]));
@@ -235,5 +259,5 @@ const accessEditor = (() => {
     });
   }
 
-  return { matrix, admission, models, softLimit };
+  return { matrix, admission, models, softLimit, desktop };
 })();

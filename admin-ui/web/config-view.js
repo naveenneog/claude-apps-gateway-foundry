@@ -16,6 +16,12 @@
   const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const names = (items) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+  const desktopFields = [
+    ['chatTabEnabled', 'Allow Chat'], ['coworkTabEnabled', 'Allow Cowork'], ['isClaudeCodeForDesktopEnabled', 'Allow Code'],
+    ['userPluginUploadsEnabled', 'Allow plugin uploads'], ['userPluginMarketplacesEnabled', 'Allow user-added plugin marketplaces'],
+    ['skillCreationEnabled', 'Allow user-created skills'], ['isDesktopExtensionEnabled', 'Allow desktop extensions'],
+    ['claudeAiImport.enabled', 'Allow Claude.ai import'], ['claudeAiImport.exportEnabled', 'Allow session export'],
+  ];
 
   // The first matrix edit on a file without policies writes what the gateway does today: every role, every model.
   function withPolicies(admin) {
@@ -31,6 +37,7 @@
 
   const configView = {
     clone,
+    desktopFields,
     isDirty(original, draft) { return JSON.stringify(original) !== JSON.stringify(draft); },
 
     allowedModels(admin, role) {
@@ -79,6 +86,28 @@
       const before = policyOf(original, role);
       if (before && !('desktop' in before) && on === desktopDefault(next)) delete policy.desktop;
       else policy.desktop = on;
+      return next;
+    },
+
+    desktopSettingOf(admin, role, key) {
+      const settings = policyOf(admin, role)?.desktopSettings;
+      const [parent, child] = key.split('.');
+      return (child ? settings?.[parent]?.[child] : settings?.[parent]) ?? null;
+    },
+
+    setDesktopSetting(admin, role, key, value) {
+      if (!desktopFields.some(([name]) => name === key)) throw new Error('Not a supported Desktop setting');
+      if (value !== null && typeof value !== 'boolean') throw new Error('A Desktop setting must be true, false or default');
+      const next = withPolicies(admin);
+      const policy = policyOf(next, role);
+      if (!policy) throw new Error('The Desktop role is not admitted');
+      const settings = policy.desktopSettings ??= {};
+      const [parent, child] = key.split('.');
+      const target = child ? (settings[parent] ??= {}) : settings;
+      if (value === null) delete target[child ?? parent];
+      else target[child ?? parent] = value;
+      if (child && !Object.keys(target).length) delete settings[parent];
+      if (!Object.keys(settings).length) delete policy.desktopSettings;
       return next;
     },
 

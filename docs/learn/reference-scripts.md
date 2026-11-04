@@ -337,6 +337,19 @@ allowed range can use the console.
 
 The parameters and their defaults are in `admin-ui/infra/Deploy-AdminUi.ps1`, lines 75-89.
 
+### Update-AdminUi.ps1
+
+`admin-ui/infra/Update-AdminUi.ps1` updates only the existing console image and verifies preserved settings and revision
+health. It makes no gateway, database, app-registration or permission changes
+([update an existing console](how-to-update-admin-console.md)).
+
+| Parameter | Meaning |
+|---|---|
+| `-ResourceGroup` | Required. The existing console and registry's resource group |
+| `-AppName` | Existing console Container App; default `ca-admin-ui` |
+| `-ImageTag` | Build tag; default `update-` followed by the current UTC timestamp. Deployment uses the resulting digest |
+| `-Plan` | Reads the target and prints the plan; builds and updates nothing |
+
 ## Test scripts
 
 The test scripts write their results under `tests/live/out`, which git ignores.

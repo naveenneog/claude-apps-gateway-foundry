@@ -143,7 +143,7 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
+  'Referrer-Policy': 'same-origin', // Easy Auth's CSRF check needs a Referer on same-origin writes.
 };
 const MAX_BODY_BYTES = 1024 * 1024;
 

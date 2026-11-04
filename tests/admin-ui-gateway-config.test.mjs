@@ -13,6 +13,16 @@ const contosoYaml = fs.readFileSync(path.join(root, 'config', 'gateway.azure-con
 const ID = '/subscriptions/sub-1/resourceGroups/rg-gw/providers/Microsoft.App/containerApps/ca-claude-gw';
 const KNOWN = ['Gateway.Standard', 'Gateway.Premium', 'Gateway.Trial'];
 
+test('T-167 review names Desktop capability-only changes', () => {
+  const before = { policies: [{ role: 'Gateway.Premium', models: ['claude-sonnet-5'], desktop: true }] };
+  const after = structuredClone(before);
+  after.policies[0].desktopSettings = { userPluginUploadsEnabled: true, claudeAiImport: { enabled: true } };
+  const changes = describeChanges(before, after);
+  assert.ok(changes.some((line) => /Gateway.Premium.*userPluginUploadsEnabled.*true/.test(line)), changes.join('\n'));
+  assert.ok(changes.some((line) => /Gateway.Premium.*claudeAiImport.*enabled/.test(line)), changes.join('\n'));
+  assert.equal(describeChanges(after, after).length, 0);
+});
+
 function fakeApp({ adminFile, temporaryDatabase = true } = {}) {
   const secrets = { 'pg-password': 'pg-secret', 'azure-client-secret-crosstenant': 'xt-secret', 'admin-write-key': 'awk', 'gateway-config': contosoYaml, 'jwt-secret': 'jwt', 'oidc-client-secret': 'oidc' };
   if (adminFile !== undefined) secrets['gateway-admin-file'] = adminFile;

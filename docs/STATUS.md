@@ -4,6 +4,76 @@
 > repository; the public repository holds copies of it as of each published revision, which its commit names
 > (ADR-0006).
 
+**P-35 customer remediation (2026-11-04; requested fixes implemented and validated):** The owner authorized fixing and testing console writes,
+the permissions indicator and user onboarding, supported Desktop import/plugin controls, and a safe update for already
+deployed consoles. ADR-0019 supersedes ADR-0011's no-referrer choice: the customer's sanitized HAR and Azure middleware
+logs identify an empty Referer as the cause of the platform CSRF 403. Acceptance: same-origin admin writes succeed,
+cross-site and non-admin writes remain refused; the documented Contributor role is recognized without a broader grant;
+Desktop capabilities are explicit per-role settings with unchanged defaults; a console-only image update preserves
+authentication, ingress, secrets, identity and the gateway database. T-165 to T-168 cover these criteria. Unknowns
+U-138 to U-141 distinguish browser, Azure and Desktop evidence. The active packet remains P-35. The header and
+permission-display fixes pass the focused HTTP/API tests. Playwright reproduced Set cap's 403 before the change,
+then verified Set cap, email-to-subject resolution, Grant role, and the Contributor indicator on the real frontend
+behind a local CSRF fixture; missing Referer and non-admin requests remain refused. This is not yet a live Azure
+Authentication result. Desktop capabilities now validate and render per role, preserve defaults, and appear in the
+reviewed editor. Playwright clicks import/plugin controls, previews and applies their draft, and verifies the other
+role remains unchanged. The image-only update path and live deployment validation are next.
+The image-only updater now passes read-only plan, successful preservation, no-op digest, failed-build, changed-setting,
+registry-mismatch and unhealthy-rollout tests. Its live plan found the existing Contoso console and printed a rollback
+reference without changing it. The Playwright-controlled test browser reached the expected Entra app; user sign-in
+requires administrator consent, which is being checked rather than bypassed.
+**Live results:** the approved test-tenant PIM activation and sign-in consent completed through Playwright. On the
+Contoso test console, the real managed identity reports ARM write and Graph assignment capabilities granted.
+Playwright granted and removed a new role for the test account and created and removed a temporary role cap; both
+POSTs returned 200 with a Referer. Original cap and assignment snapshots were restored. An intentional no-referrer
+POST still returned Azure Authentication 403, proving its CSRF check remains enabled. Import/plugin controls produced
+a valid live preview; Apply was deliberately not clicked because this sandbox's old deployed admin file lacks a
+later email-claim setting. Local Playwright verifies the full preview/apply path. The image updater's first
+preservation check flagged a difference while Azure change history recorded only the image change; a test exposed
+JSON property-order sensitivity, now corrected without ignoring any setting. A second live rollout reached Healthy
+revision 0000003 with all preservation checks passing. Customer infrastructure has not been accessed or changed.
+The final subject-warning live test exposed two further budget UI cases: the gateway synthesizes an empty actor
+when an unknown user ID is queried explicitly, and submitting before initial metadata loaded could write a cap and
+then fail while refreshing an uninitialized people map. The temporary test cap was removed immediately. Playwright
+now models the synthetic actor, confirms unknown subjects before writing, and keeps submission disabled until
+metadata is ready. Both regressions were observed RED and are now GREEN. The temporary PIM activation used for
+test-app consent was explicitly deactivated after the live checks.
+The final source (2f93790) was rolled out as Healthy console revision 0000005 through the image-only updater. In a
+fresh Playwright session, a synthesized unknown subject triggered confirmation and Cancel sent no cap write;
+Set cap, Grant role and their cleanup again returned 200, and the original snapshots converged across Graph
+replication. The deliberate missing-Referer request remained 403. The full packet gate passed in 149 seconds;
+the final ledger and publication privacy checks also passed. Customer deployment remains a separate operator update.
+
+**Customer remediation council (self-review, 2026-11-04):**
+
+| Role | Verdict | Notes |
+|---|---|---|
+| Architect | PASS | The existing renderer, policy save and container registry are reused. The image-only updater does not rerun gateway provisioning or Entra grants; ADR-0019 records the preservation contract. |
+| Coder | PASS | Both live-discovered budget edge cases have browser regressions. Settings comparison retains every value while ignoring only JSON object-key order. |
+| QA | PASS-WITH-NOTES | HTTP/API tests, full packet gate, Playwright fixture, actual Azure role/cap writes, cleanup and twelve syntax-valid named-test mutations pass. Customer tenant access and actual Desktop import/plugin execution were not claimed. |
+| UX | PASS | Cap submission waits for metadata; unknown subjects require confirmation. Desktop controls preserve defaults and use the existing review/apply flow. A separate update guide gives plan, update and rollback steps. |
+| Security | PASS | No broader role or CSRF bypass was added. Same-origin Referer, Entra sign-in, AdminUi.Admin, JSON limits and cross-site refusal remain. Plugin/import settings are explicit per-role opt-ins; no plugin or customer data is installed/imported. |
+
+**Earlier customer console diagnosis (2026-11-04; superseded by the remediation above):** The gateway-scoped Container Apps
+Contributor assignment for the console identity already exists, but Settings still shows `arm.writeGateway` missing
+after **Check again**. With the published built-in role's `Microsoft.App/containerApps/*/read` and `*/write` patterns,
+the local capability matcher reports the app-level read/write actions false and `listSecrets/action` true. The
+customer's actual permissions API response is not yet available; this is not sufficient evidence to broaden its
+permissions. A separate customer screenshot shows granting `Gateway.Standard` through the console fails with
+HTTP 403. The response body and the source of the refusal (console, authentication layer or Microsoft Graph) remain
+unverified. Direct assignment through the gateway's Entra enterprise application is the pilot workaround.
+Sources: admin-ui/server/capabilities.mjs:13-17; Microsoft's Container Apps Contributor definition at
+https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-contributor
+(read 2026-11-04). The next diagnostic is the failed `/api/developers` response body and only `graph`, `arm` and
+`problems` from `/api/capabilities`; never request cookies or token headers. The customer is unavailable to supply
+these now, so no additional permission changes or deployment are made.
+
+**Customer installation issue (2026-11-04; logged for later, no fix started):** A customer screenshot shows
+`Copy-Item` could not find `config\gateway-admin.example.json` from a directory ending in
+`claude-code-foundry-gateway`. The installer belongs to `claude-apps-gateway-foundry`; the customer's actual Git remote
+and parent directory contents have not been verified. A JSON file alone does not provide the installer in a different
+repository. After the customer session, verify the path and consider clearer first-run repository guidance.
+
 **P-35 onboarding documentation clarification (2026-11-04):** The owner asked where the default sign-in credential is
 stored and requested novice-friendly documentation. The README and first-install tutorial identify the new
 test-topology certificate and private key as the Container Apps secret `oidc-certificate`, not Key Vault, explain

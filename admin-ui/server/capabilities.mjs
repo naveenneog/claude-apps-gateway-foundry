@@ -10,7 +10,11 @@ export function tokenRoles(token) {
   } catch { return []; }
 }
 
-const toRegex = (pattern) => new RegExp(`^${pattern.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\/]/g, '\\$&')).join('.*')}$`, 'i');
+const toRegex = (pattern) => new RegExp(`^${pattern.split('/').map((part, i, parts) => {
+  // An interior wildcard also covers the resource itself, e.g. containerApps/*/read.
+  if (part === '*' && i < parts.length - 1) return '(?:[^/]+/)*';
+  return part.split('*').map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + (i < parts.length - 1 ? '/' : '');
+}).join('')}$`, 'i');
 
 /** Whether permissions [{actions, notActions}] allow one action, as Azure RBAC evaluates wildcards and notActions. */
 export function actionAllowed(permissions, action) {

@@ -301,6 +301,31 @@ test('T-122 desktopSettings is refused unless it holds known switches as true or
   assert.doesNotMatch(renderGatewayConfig(off, { topology: 'test' }), /desktop/);
 });
 
+test('T-167 Desktop import and plugin capabilities render only for the selected Desktop policy', () => {
+  const settings = { userPluginMarketplacesEnabled: true, userPluginUploadsEnabled: false, skillCreationEnabled: true,
+    isDesktopExtensionEnabled: true, claudeAiImport: { enabled: true, exportEnabled: false } };
+  const admin = desktopAdmin(settings);
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+  const yaml = renderGatewayConfig(admin, { topology: 'test' });
+  const [premium, standard] = yaml.slice(yaml.indexOf('\nmanaged:\n')).split('Gateway.Standard');
+  for (const [key, value] of Object.entries(settings).filter(([key]) => key !== 'claudeAiImport')) assert.ok(premium.includes(`${key}: ${value}`), key);
+  assert.match(premium, /claudeAiImport:\n          enabled: true\n          exportEnabled: false/);
+  assert.doesNotMatch(standard, /userPlugin|claudeAiImport|skillCreation|isDesktopExtension/);
+  assert.doesNotMatch(yaml, /automatic3pImport/, 'enabling import is not automatic migration');
+  assert.doesNotMatch(renderGatewayConfig(desktopAdmin(settings, false), { topology: 'test' }), /userPlugin|claudeAiImport/);
+});
+
+test('T-167 Desktop capability input is strict, including nested import options', () => {
+  for (const settings of [
+    { userPluginUploadsEnabled: 'true' }, { claudeAiImport: true }, { claudeAiImport: [] },
+    { claudeAiImport: { enabled: 'true' } }, { claudeAiImport: { automatic3pImport: true } },
+    { claudeAiImport: { enabled: true, unsupported: true } }, { skillCreationEnabled: null },
+  ]) {
+    const admin = desktopAdmin(settings);
+    assert.ok(adminErrors(admin, admin.roles, 'test').length > 0, JSON.stringify(settings));
+  }
+});
+
 // T-135 (ADR-0014): spendPacing turns on the soft limit. The job writes with its own key, so the admin block lists it,
 // and the 429 a paced person gets explains the daily cap.
 const pacing = (spendPacing, deployment = { adminApi: true }) => ({ ...twoRoles(), deployment, spendPacing });

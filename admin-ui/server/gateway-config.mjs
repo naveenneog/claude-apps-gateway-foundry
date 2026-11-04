@@ -69,6 +69,11 @@ export function describeChanges(before, after) {
     const now = list(p.models);
     if (was.join('\n') !== now.join('\n')) lines.push(`${p.role}: models ${join(was)} → ${join(now)}`);
     if ((old.desktop ?? null) !== (p.desktop ?? null)) lines.push(`${p.role}: Claude Desktop ${old.desktop === true ? 'on' : old.desktop === false ? 'off' : 'default'} → ${p.desktop === true ? 'on' : p.desktop === false ? 'off' : 'default'}`);
+    for (const key of new Set([...Object.keys(old.desktopSettings ?? {}), ...Object.keys(p.desktopSettings ?? {})])) {
+      const before = JSON.stringify(old.desktopSettings?.[key] ?? null);
+      const after = JSON.stringify(p.desktopSettings?.[key] ?? null);
+      if (before !== after) lines.push(`${p.role}: Desktop ${key}: ${before} → ${after}`);
+    }
   }
   // ADR-0014: the soft limit, named the way the console shows it.
   const soft = (a) => (a?.spendPacing?.softLimitPercent ? `${a.spendPacing.softLimitPercent}% of the monthly cap` : 'off');

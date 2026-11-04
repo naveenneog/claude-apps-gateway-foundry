@@ -23,6 +23,33 @@ test('T-102 actionAllowed honours wildcards and notActions, case-insensitively',
   assert.equal(actionAllowed([{ actions: ['*/read'], notActions: [] }], 'Microsoft.App/containerApps/write'), false);
 });
 
+test('T-166 the published Container Apps Contributor patterns include the gateway itself and its children', async () => {
+  const permissions = [{ actions: [
+    'Microsoft.Authorization/*/read',
+    'Microsoft.App/containerApps/*/read',
+    'Microsoft.App/containerApps/*/write',
+    'Microsoft.App/containerApps/*/action',
+  ], notActions: [] }];
+  for (const action of ['read', 'write', 'listSecrets/action', 'revisions/read', 'revisions/replicas/read']) {
+    assert.equal(actionAllowed(permissions, `Microsoft.App/containerApps/${action}`), true, action);
+  }
+  const result = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: async () => permissions,
+    signIn: { mode: 'required', isAdmin: true } });
+  assert.deepEqual(result.arm, { readGateway: true, writeGateway: true });
+  assert.equal(actionAllowed(permissions, 'Microsoft.App/jobs/write'), false);
+  assert.equal(actionAllowed(permissions, 'Microsoft.App/containerAppsOther/write'), false);
+});
+
+test('T-166 zero-segment wildcards retain exclusions and do not invent write permissions', () => {
+  const actions = ['Microsoft.App/containerApps/*/read', 'Microsoft.App/containerApps/*/write'];
+  assert.equal(actionAllowed([{ actions, notActions: ['Microsoft.App/containerApps/*/write'] }], 'Microsoft.App/containerApps/write'), false);
+  assert.equal(actionAllowed([{ actions, notActions: ['Microsoft.App/containerApps/*/write'] }], 'Microsoft.App/containerApps/revisions/write'), false);
+  assert.equal(actionAllowed([{ actions: ['Microsoft.App/containerApps/*/read'] }], 'Microsoft.App/containerApps/write'), false);
+  assert.equal(actionAllowed([{ actions: ['Microsoft.App/containerApps/revisions/*/read'] }], 'Microsoft.App/containerApps/read'), false);
+  assert.equal(actionAllowed([{ actions, notActions: ['Microsoft.App/containerApps/*'] }, { actions: ['Microsoft.App/containerApps/write'] }],
+    'Microsoft.App/containerApps/write'), true, 'another role can grant an action excluded from the first role');
+});
+
 test('T-102 each capability is granted exactly when its Graph role or ARM actions are present', async () => {
   const signIn = { mode: 'required', user: { name: 'A', upn: 'a@x' }, isAdmin: true };
   const none = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: async () => [], signIn });

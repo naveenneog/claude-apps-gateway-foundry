@@ -164,7 +164,7 @@ The sample sets 1,000 starts and 100 submissions per address per 600 seconds, no
    ([policy check](https://code.claude.com/docs/en/managed-settings#check-that-a-policy-is-in-force), [models](https://code.claude.com/docs/en/claude-apps-gateway#whats-enforced-on-developers)).
 
 On the test machine of the [tutorial](tutorial-deploy-network-restricted.md), Claude Code 2.1.284 showed these screens
-on 2026-09-29 (docs/TEST-PLAN.md:370-370). After **Enter** on the Cloud gateway screen, it asks to trust the gateway
+on 2026-09-29 (docs/TEST-PLAN.md:380). After **Enter** on the Cloud gateway screen, it asks to trust the gateway
 and shows the start of the certificate's SHA-256 fingerprint:
 
 ![Screenshot of Claude Code asking Trust gateway ca-claude-gw on the environment's default domain, with the certificate fingerprint 2fbc49857fa6e209 and the choices Yes, trust this gateway and No, go back.](media/clients/login-trust-gateway.png)

@@ -18,6 +18,8 @@
       items:
         - name: Use the admin console
           href: how-to-use-admin-console.md
+        - name: Update an existing admin console
+          href: how-to-update-admin-console.md
         - name: Manage users, groups and budgets
           href: how-to-manage-users-and-groups.md
         - name: Group developers into departments and teams

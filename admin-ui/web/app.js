@@ -128,6 +128,7 @@ async function renderBudgets(ctx) {
   if (!ctx.active()) return;
   form.setRoles(rolesView.choices(roles instanceof Error ? null : roles, config instanceof Error ? null : config.admin));
   const people = new Map((effective instanceof Error ? [] : effective.data ?? []).map((r) => [r.scope?.user_id, spendView.spendRow(r)]));
+  form.setReady();
 
   async function refresh() {
     const result = await ui.settle(api.get('/api/spend-limits'));
@@ -185,8 +186,8 @@ function budgetForm(onSaved) {
   let role = el('select', { name: 'role', disabled: true }, [option('', 'Loading roles…')]);
   const amount = el('input', { name: 'amount', inputmode: 'decimal', placeholder: 'Unlimited', autocomplete: 'off' });
   const period = el('select', { name: 'period' }, [option('monthly', 'Monthly', true), option('weekly', 'Weekly'), option('daily', 'Daily')]);
-  const submit = ui.button('Set cap', { kind: 'primary', type: 'submit', iconName: 'check' });
-  const userField = ui.field({ label: 'User', control: user, hint: 'E-mail address or OIDC subject. An address resolves after the user’s first request through the gateway.', className: 'wide' });
+  const submit = ui.button('Set cap', { kind: 'primary', type: 'submit', iconName: 'check', disabled: true });
+  const userField = ui.field({ label: 'User', control: user, hint: 'E-mail address or gateway sign-in subject, not the Entra object ID. An address resolves after the user’s first model request through the gateway.', className: 'wide' });
   const roleField = ui.field({ label: 'Role', control: role, hint: 'An admitted gateway role.', className: 'wide' });
   const orgField = el('div', { class: 'field wide' }, [el('span', { class: 'field-label', text: 'Applies to' }), el('p', { class: 'field-static', text: 'Everyone who uses the gateway' })]);
   const status = el('div', { class: 'form-status' });
@@ -215,8 +216,21 @@ function budgetForm(onSaved) {
         target = { type: 'rbac_group', rbac_group_id: role.value.trim() };
       } else {
         const value = user.value.trim();
-        const found = value.includes('@') ? (await api.get(`/api/spend-limits/effective?period[]=monthly&limit=1000&q=${encodeURIComponent(value)}`)).data : [];
+        const query = value.includes('@') ? `q=${encodeURIComponent(value)}` : `user_ids[]=${encodeURIComponent(value)}`;
+        const found = value ? (await api.get(`/api/spend-limits/effective?period[]=monthly&limit=1000&${query}`)).data : [];
         try { target = { type: 'user', user_id: spendView.resolveUserTarget(value, found) }; } catch (err) { ui.setFieldError(user, err.message); user.focus(); return; }
+        // /effective can synthesize a nameless actor for an unknown explicitly requested subject.
+        const recorded = (found ?? []).some((row) => row.scope?.user_id === target.user_id
+          && typeof row.actor?.email_address === 'string' && row.actor.email_address.trim() !== '');
+        if (!value.includes('@') && !recorded) {
+          const confirmed = await ui.confirm({
+            title: 'Use this gateway subject?',
+            body: ['The gateway has not recorded this subject. An Entra object ID is not the gateway sign-in subject; a cap for the wrong ID matches nobody.',
+              'An email address after the user’s first model request resolves to the recorded gateway subject.'],
+            confirmText: 'Use gateway subject',
+          });
+          if (!confirmed) return;
+        }
       }
       await api.post('/api/spend-limits', { scope: target, amountCents, period: period.value });
       ui.toast(`Cap set: ${spendView.scopeText(target)} · ${spendView.usd(amountCents)} ${period.value}`);
@@ -231,6 +245,7 @@ function budgetForm(onSaved) {
   const node = ui.card({ title: 'Set a cap', description: 'Setting a cap for a scope and period that already has one replaces it.', content: [status, form] });
   return {
     node,
+    setReady() { submit.disabled = false; },
     // Role choices: the admitted roles; null (neither Entra nor the admin file readable) falls back to free text.
     setRoles(choices) {
       const next = choices

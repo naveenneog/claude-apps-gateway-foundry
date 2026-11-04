@@ -118,6 +118,40 @@ Desktop reads the gateway's values when it starts, so a change reaches a develop
 2026-10-26, with Claude Desktop 2.42304.2.0 against the public Contoso gateway, Chat on with Cowork off showed Home and
 Code with a Chats list, and Cowork on with Chat and Code off showed only a Tasks list (docs/TEST-PLAN.md, T-123).
 
+### Enable import, plugins and extensions
+
+In the admin console, **Access & models** > **Role access** enables Claude Desktop for a role. The
+**Desktop capabilities** card then offers that role's Chat, Cowork, Code, import, export, plugin-upload,
+user-added marketplace, user-created skill and desktop-extension settings. Each has **Desktop default (unset)**,
+**Enabled** and **Disabled**. **Review changes** shows the settings, and **Apply and roll out** starts a gateway
+revision. Desktop receives them when it reloads its bootstrap configuration, normally after restarting the app.
+
+The same options can be written in that role's `desktopSettings`, for example:
+
+```json
+{
+  "role": "Gateway.Premium",
+  "models": ["claude-sonnet-5"],
+  "desktop": true,
+  "desktopSettings": {
+    "userPluginUploadsEnabled": true,
+    "userPluginMarketplacesEnabled": false,
+    "skillCreationEnabled": true,
+    "isDesktopExtensionEnabled": false,
+    "claudeAiImport": { "enabled": true, "exportEnabled": false }
+  }
+}
+```
+
+`claudeAiImport.enabled` enables **Settings > Import** for a Claude.ai data export or earlier local sessions.
+Export also needs import enabled. Imported conversations and exported zip files can contain sensitive customer
+data. Plugin uploads and extensions can execute programs on the developer's machine; these switches neither
+install a plugin nor approve its tool calls. Automatic third-party session migration is independent, can reactivate
+scheduled tasks and plugins, and is not enabled by these controls. Marketplace allowlists and detailed organization
+plugin policies remain separate Desktop managed settings
+([Desktop configuration reference](https://claude.com/docs/third-party/claude-desktop/configuration#claudeaiimport)).
+These Desktop controls do not configure plugins in the standalone Claude Code terminal.
+
 ## Pace the last part of a monthly cap with a soft limit
 
 A soft limit spreads the last part of a person's monthly spend cap over the rest of the month. Once a person's spend

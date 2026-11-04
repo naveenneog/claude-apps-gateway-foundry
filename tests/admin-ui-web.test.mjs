@@ -89,6 +89,19 @@ const contoso = {
 };
 const frozen = JSON.stringify(contoso);
 
+test('T-167 Desktop capability draft edits preserve other roles, false values and unset defaults', () => {
+  const cv = load('config-view.js', 'configView');
+  let draft = cv.setDesktopSetting(contoso, 'Gateway.Premium', 'userPluginUploadsEnabled', true);
+  draft = cv.setDesktopSetting(draft, 'Gateway.Premium', 'claudeAiImport.enabled', false);
+  assert.deepEqual(plain(draft.policies[0].desktopSettings), { userPluginUploadsEnabled: true, claudeAiImport: { enabled: false } });
+  assert.equal(draft.policies[1].desktopSettings, undefined);
+  assert.equal(JSON.stringify(contoso), frozen);
+  draft = cv.setDesktopSetting(draft, 'Gateway.Premium', 'userPluginUploadsEnabled', null);
+  draft = cv.setDesktopSetting(draft, 'Gateway.Premium', 'claudeAiImport.enabled', null);
+  assert.deepEqual(plain(draft), contoso, 'resetting to defaults removes empty objects');
+  assert.throws(() => cv.setDesktopSetting(contoso, 'Gateway.Premium', 'bootstrapUrl', true), /supported/);
+});
+
 test('T-105 the role × model matrix reads policies, and with no policies every admitted role has every model', () => {
   const cv = load('config-view.js', 'configView');
   assert.deepEqual(plain(cv.allowedModels(contoso, 'Gateway.Standard')), ['claude-sonnet-5']);
