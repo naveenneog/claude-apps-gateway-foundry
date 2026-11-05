@@ -68,9 +68,17 @@ gateway app. The grant, by an account with Owner or User Access Administrator, i
 ```powershell
 $principal = az identity show -g $rg -n id-admin-ui --query principalId -o tsv
 $envId = az containerapp env show -g $rg -n cae-claude-gw --query id -o tsv
-az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
-  --role 'Container Apps Operator' --scope $envId
+"principal=$principal"; "envId=$envId"
+if ($principal -and $envId) {
+  az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
+    --role f3bd1b5c-91fa-40e7-afe7-0c11d331232c --scope $envId
+}
 ```
+
+`f3bd1b5c-91fa-40e7-afe7-0c11d331232c` is the built-in Container Apps Operator role ID, the same in every tenant
+([built-in roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator)).
+The ID avoids a lookup by display name, which Azure CLI reports as `Role 'Container Apps Operator' doesn't exist`
+when it cannot resolve the name at that scope. The `if` stops the command when either value is empty.
 
 Container Apps Operator reads the environment and allows join; it does not allow writing the environment or any app
 ([Container Apps Operator](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator)).
