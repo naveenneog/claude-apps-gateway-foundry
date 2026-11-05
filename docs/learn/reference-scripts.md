@@ -323,6 +323,7 @@ allowed range can use the console.
 | `-ResourceGroup` | Required. The resource group the gateway already runs in |
 | `-EnvironmentName` | The Container Apps environment; default `cae-claude-gw` |
 | `-GatewayAppName` | The gateway Container App; default `ca-claude-gw` |
+| `-GatewayIdentityName` | The gateway user-assigned managed identity; default `id-claude-gw` |
 | `-AcrName` | Required. The container registry's name, not its login server |
 | `-AppRegistrationName` | Required. The display name of the gateway's Entra app registration |
 | `-AdminFile` | The admin file; default `config/gateway-admin.azure-private.json` |

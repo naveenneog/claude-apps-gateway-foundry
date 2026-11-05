@@ -22,6 +22,7 @@ export function actionAllowed(permissions, action) {
 }
 
 const ENVIRONMENT_ID = /^\/subscriptions\/[^/?#]+\/resourceGroups\/[^/?#]+\/providers\/Microsoft\.App\/managedEnvironments\/[A-Za-z0-9-]+$/i;
+const USER_ASSIGNED_IDENTITY_ID = /^\/subscriptions\/[^/?#]+\/resourceGroups\/[^/?#]+\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[A-Za-z0-9_-]+$/i;
 
 /** admin-ui's permissions on the Container Apps environment the gateway app names; the ID comes from ARM and is checked before the token goes anywhere with it. */
 export async function environmentPermissions({ arm, resourceId }) {
@@ -31,6 +32,17 @@ export async function environmentPermissions({ arm, resourceId }) {
   return (await arm('GET', `${environmentId}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`)).json?.value ?? [];
 }
 
+/** admin-ui's assign/action permission on every user-assigned identity attached to the gateway app. */
+export async function gatewayIdentityPermissions({ arm, resourceId }) {
+  const app = (await arm('GET', `${resourceId}?api-version=2024-03-01`)).json;
+  const identityIds = Object.keys(app?.identity?.userAssignedIdentities ?? {});
+  if (!identityIds.length || identityIds.some((id) => !USER_ASSIGNED_IDENTITY_ID.test(id))) {
+    throw new Error('the gateway app names no valid user-assigned identity');
+  }
+  return Promise.all(identityIds.map(async (identityId) =>
+    (await arm('GET', `${identityId}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`)).json?.value ?? []));
+}
+
 const GRAPH_GRANT = 'No Microsoft Entra admin-center portal workflow is available for granting Microsoft Graph application permissions to a managed identity. A Privileged Role Administrator or Global Administrator must create the app-role assignment through Microsoft Graph: https://learn.microsoft.com/en-us/graph/permissions-grant-via-msgraph.';
 const SIGN_IN_GRANT = 'If the admin-ui sign-in app registration or role does not exist, first create the app registration in Microsoft Entra admin center > App registrations, add an enabled user role with value AdminUi.Admin under App roles, enable ID token issuance, and add the Web redirect URI https://<ca-admin-ui-fqdn>/.auth/login/aad/callback. Then in Azure Portal, open Container Apps > ca-admin-ui > Security > Authentication and enable the Microsoft Entra provider with that registration. Once the role exists, assign it in Microsoft Entra admin center > Enterprise applications > the admin-ui app > Users and groups > Add user/group. See https://learn.microsoft.com/en-us/azure/container-apps/authentication-entra and https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/assign-user-or-group-access-portal.';
 
@@ -38,14 +50,16 @@ const SIGN_IN_GRANT = 'If the admin-ui sign-in app registration or role does not
  * graphToken: async () => an app-only Graph token. armPermissions: async () => [{actions, notActions}] on the gateway app.
  * tagsStatus: async () => {available, reason} of the business-unit tag store in the gateway database (ADR-0015).
  */
-export async function capabilities({ graphToken, armPermissions, environmentPermissions = async () => [], signIn, tagsStatus = async () => ({ available: false, reason: 'Business-unit tags are not configured.' }) }) {
+export async function capabilities({ graphToken, armPermissions, environmentPermissions = async () => [], gatewayIdentityPermissions = async () => [], signIn, tagsStatus = async () => ({ available: false, reason: 'Business-unit tags are not configured.' }) }) {
   const problems = [];
   let roles = [];
   let perms = [];
   let envPerms = [];
+  let gatewayIdentityPerms = [];
   try { roles = tokenRoles(await graphToken()); } catch (e) { problems.push(`Microsoft Graph token: ${e.message}`); }
   try { perms = await armPermissions(); } catch (e) { problems.push(`Azure permissions on the gateway app: ${e.message}`); }
   try { envPerms = await environmentPermissions(); } catch (e) { problems.push(`Azure permissions on the gateway environment: ${e.message}`); }
+  try { gatewayIdentityPerms = await gatewayIdentityPermissions(); } catch (e) { problems.push(`Azure permissions on the gateway identity: ${e.message}`); }
   let tags;
   try { tags = await tagsStatus(); } catch (e) { tags = { available: false, reason: e.message }; }
   if (!tags.available && tags.reason) problems.push(`Business-unit tags: ${tags.reason}`);
@@ -61,6 +75,9 @@ export async function capabilities({ graphToken, armPermissions, environmentPerm
     writeGateway: ['Microsoft.App/containerApps/read', 'Microsoft.App/containerApps/write', 'Microsoft.App/containerApps/listSecrets/action'].every((a) => actionAllowed(perms, a)),
     // A full PUT of the gateway app is also checked against its environment (403 LinkedAuthorizationFailed without it).
     joinEnvironment: actionAllowed(envPerms, 'Microsoft.App/managedEnvironments/join/action'),
+    // Reattaching the gateway's user-assigned identity is checked as a linked authorization on that identity.
+    assignGatewayIdentity: gatewayIdentityPerms.length > 0 && gatewayIdentityPerms.every((identityPerms) =>
+      actionAllowed(identityPerms, 'Microsoft.ManagedIdentity/userAssignedIdentities/assign/action')),
   };
   const items = [
     { key: 'signIn', label: 'Admin sign-in', granted: signIn?.mode === 'required' && signIn?.isAdmin === true,
@@ -82,6 +99,9 @@ export async function capabilities({ graphToken, armPermissions, environmentPerm
     { key: 'arm.joinEnvironment', label: "Container Apps Operator on the gateway's Container Apps environment (Azure RBAC)", granted: arm.joinEnvironment,
       unlocks: 'Applying a saved gateway configuration. Azure checks Microsoft.App/managedEnvironments/join/action on the environment for every update of the gateway app, and answers 403 LinkedAuthorizationFailed without it.',
       howToGrant: 'Azure Portal: open the gateway\'s Container Apps environment (for example cae-claude-gw) > Access control (IAM) > Add role assignment > Container Apps Operator > select the id-admin-ui managed identity. Keep the scope at the environment. Container Apps Operator has no write access to the environment or to any app. See https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator.' },
+    { key: 'arm.assignGatewayIdentity', label: "Managed Identity Operator on the gateway's user-assigned identity (Azure RBAC)", granted: arm.assignGatewayIdentity,
+      unlocks: 'Applying a saved gateway configuration. Azure checks Microsoft.ManagedIdentity/userAssignedIdentities/assign/action when the gateway app update reattaches its managed identity.',
+      howToGrant: 'Azure Portal: open the gateway user-assigned identity (for example id-claude-gw) > Access control (IAM) > Add role assignment > Managed Identity Operator > select the id-admin-ui managed identity. Keep the scope at id-claude-gw. This role allows assigning the identity but not changing it. See https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/identity#managed-identity-operator.' },
   ];
   return { signIn, items, graph, arm, problems };
 }

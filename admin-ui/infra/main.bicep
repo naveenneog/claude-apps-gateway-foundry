@@ -55,6 +55,9 @@ param allowAnyAddress bool = false
 @description('The gateway Container App admin-ui reads and writes the configuration of (ADR-0010).')
 param gatewayAppName string = 'ca-claude-gw'
 
+@description('The gateway user-assigned managed identity admin-ui must preserve when it updates the gateway Container App.')
+param gatewayIdentityName string = 'id-claude-gw'
+
 @description('The topology the gateway\'s configuration is rendered for, as new-gateway-config.mjs --topology.')
 @allowed([ 'test', 'private' ])
 param gatewayTopology string = 'private'
@@ -87,9 +90,14 @@ param signInSecretDays int = 365
 @description('ADR-0019: assigns Container Apps Operator on the environment. Deploy-AdminUi.ps1 passes false when the identity already holds it there, because a grant made in the Portal has another name and a second one fails with RoleAssignmentExists.')
 param grantEnvironmentJoin bool = true
 
+@description('ADR-0019: assigns Managed Identity Operator on the gateway identity. Deploy-AdminUi.ps1 passes false when the identity already holds it there, because a grant made in the Portal has another name and a second one fails with RoleAssignmentExists.')
+param grantGatewayIdentityAssign bool = true
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = { name: environmentName }
 
 resource gatewayApp 'Microsoft.App/containerApps@2024-03-01' existing = { name: gatewayAppName }
+
+resource gatewayIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = { name: gatewayIdentityName }
 
 
 // A separate identity from the gateway's own (least privilege, ADR-0008): this one needs Microsoft Graph
@@ -135,6 +143,18 @@ resource gatewayEnvironmentJoin 'Microsoft.Authorization/roleAssignments@2022-04
   scope: environment
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f3bd1b5c-91fa-40e7-afe7-0c11d331232c') // Container Apps Operator
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// A PUT of the gateway app also authorizes reattaching its user-assigned identity. Managed Identity Operator is
+// scoped to that identity and grants assign/action without permission to change the identity itself (ADR-0019).
+resource gatewayIdentityAssigner 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantGatewayIdentityAssign) {
+  name: guid(gatewayIdentity.id, identity.id, 'ManagedIdentityOperator')
+  scope: gatewayIdentity
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f1a07417-d97a-45cb-824c-7a7467783830') // Managed Identity Operator
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
   }

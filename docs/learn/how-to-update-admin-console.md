@@ -88,6 +88,26 @@ Operator** > `id-admin-ui`. A new assignment can take several minutes to apply
 **Check again** then reports it, and **Apply and roll out** is retried. A later `Deploy-AdminUi.ps1` run finds this
 assignment and does not create a second one, which Azure would refuse with `RoleAssignmentExists`.
 
+The gateway app also reattaches its user-assigned managed identity on each update. If **Apply and roll out** reports
+403 `LinkedAuthorizationFailed` for `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action`, assign
+**Managed Identity Operator** on `id-claude-gw` to `id-admin-ui`:
+
+```powershell
+$principal = az identity show -g $rg -n id-admin-ui --query principalId -o tsv
+$identityId = az identity show -g $rg -n id-claude-gw --query id -o tsv
+"principal=$principal"; "identityId=$identityId"
+if ($principal -and $identityId) {
+  az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
+    --role f1a07417-d97a-45cb-824c-7a7467783830 --scope $identityId
+}
+```
+
+The role ID is the built-in **Managed Identity Operator**. Its `assign/action` permission is scoped to the gateway
+identity, not the resource group, and it does not let `id-admin-ui` change that identity. In the Portal, open
+`id-claude-gw` > **Access control (IAM)** > **Add role assignment** > **Managed Identity Operator** > `id-admin-ui`.
+Refresh **Settings > Check again** after the grant takes effect. The installer skips creating a duplicate if this
+assignment already exists.
+
 **Developers > Grant role** and **Budgets > Set cap** exercise write requests. For a user cap, the email resolves
 after the user's first model request; a manually entered ID is the gateway sign-in subject, not the Entra object ID.
 An HTTP 403 with Azure Authentication's CSRF substatus 60 and an empty Referer is described in

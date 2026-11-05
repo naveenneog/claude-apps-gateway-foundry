@@ -22,6 +22,22 @@ T-169; live negative and positive probe); UX PASS (the missing grant is named be
 Security PASS (Operator has no write; the environment ID from ARM is validated before the managed-identity token is
 sent; `--assignee` and `--scope` are checked non-empty before `az role assignment list`).
 
+**P-35 gateway identity assignment for Apply (2026-11-05):** After the environment grant, the customer's retry
+reported 403 `LinkedAuthorizationFailed` for `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` on
+`id-claude-gw`. Azure checks this when a gateway app update reattaches its user-assigned identity. The built-in
+Managed Identity Operator role (`f1a07417-d97a-45cb-824c-7a7467783830`) includes the action without identity write
+permission (U-143). Fix (ADR-0019 amendment, T-170): Bicep assigns the role to `id-admin-ui` scoped only to
+`id-claude-gw`, and full redeployment skips an existing manual assignment; Settings > Permissions checks every
+identity attached to the gateway and the editor names the missing grant before Apply. The update guide gives the
+one-time command. On Contoso, the role was assigned to `id-admin-ui` and the image-only update reached Healthy
+`ca-admin-ui--0000007`; Bicep compilation, PowerShell parsing and 101 focused tests passed. The signed-in browser
+session expired before `/api/capabilities` could be checked, and no gateway config was applied. Council: Architect
+PASS (grant is at the identity resource, not the group or app); Coder PASS (review found no significant issue);
+QA PASS (101 focused tests and 838 full-suite tests pass; the live role definition confirms assign/action and no
+write); UX PASS (the permissions item, read-only reason and existing-install steps name the missing permission);
+Security PASS (identity ID is validated before use, and Managed Identity Operator is scoped to the gateway identity).
+The packet gate is pending.
+
 **P-35 customer remediation (2026-11-04; requested fixes implemented and validated):** The owner authorized fixing and testing console writes,
 the permissions indicator and user onboarding, supported Desktop import/plugin controls, and a safe update for already
 deployed consoles. ADR-0019 supersedes ADR-0011's no-referrer choice: the customer's sanitized HAR and Azure middleware

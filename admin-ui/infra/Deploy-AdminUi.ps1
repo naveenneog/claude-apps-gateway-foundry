@@ -32,6 +32,9 @@
 .PARAMETER GatewayAppName
     The existing gateway Container App's name. Default: ca-claude-gw.
 
+.PARAMETER GatewayIdentityName
+    The existing gateway user-assigned managed identity's name. Default: id-claude-gw.
+
 .PARAMETER AcrName
     The existing Azure Container Registry name (bare name, not the login server).
 
@@ -83,6 +86,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ResourceGroup,
     [string]$EnvironmentName = 'cae-claude-gw',
     [string]$GatewayAppName = 'ca-claude-gw',
+    [string]$GatewayIdentityName = 'id-claude-gw',
     [Parameter(Mandatory = $true)][string]$AcrName,
     [Parameter(Mandatory = $true)][string]$AppRegistrationName,
     [string]$AdminFile = 'config/gateway-admin.azure-private.json',
@@ -225,6 +229,13 @@ if ($existingPrincipal -and $environmentId) {
     $held = @(az role assignment list --assignee $existingPrincipal --scope $environmentId --role f3bd1b5c-91fa-40e7-afe7-0c11d331232c -o json 2>$null | ConvertFrom-Json)
     if ($held.Count -gt 0) { $grantEnvironmentJoin = $false; Write-Host '  Container Apps Operator on the environment: already assigned' }
 }
+$grantGatewayIdentityAssign = $true
+$identityPrincipal = (az identity show -g $ResourceGroup -n $GatewayIdentityName --query principalId -o tsv 2>$null)
+$gatewayIdentityId = (az identity show -g $ResourceGroup -n $GatewayIdentityName --query id -o tsv 2>$null)
+if ($existingPrincipal -and $identityPrincipal -and $gatewayIdentityId) {
+    $held = @(az role assignment list --assignee $existingPrincipal --scope $gatewayIdentityId --role f1a07417-d97a-45cb-824c-7a7467783830 -o json 2>$null | ConvertFrom-Json)
+    if ($held.Count -gt 0) { $grantGatewayIdentityAssign = $false; Write-Host "  Managed Identity Operator on $GatewayIdentityName`: already assigned" }
+}
 Step 'Deploy Bicep' {
     $paramFile = [IO.Path]::GetTempFileName()
     @{
@@ -243,6 +254,7 @@ Step 'Deploy Bicep' {
             allowedCidr               = @{ value = $AllowedCidr }
             allowAnyAddress           = @{ value = [bool]$AllowAnyAddress }
             gatewayAppName            = @{ value = $GatewayAppName }
+            gatewayIdentityName       = @{ value = $GatewayIdentityName }
             gatewayTopology           = @{ value = $Topology }
             gatewayAdminFilePath      = @{ value = ($AdminFile -replace '\\', '/') }
             enableSignIn              = @{ value = [bool]$EnableSignIn }
@@ -252,6 +264,7 @@ Step 'Deploy Bicep' {
             signInCertificateMonths   = @{ value = $CredentialValidityMonths }
             signInSecretDays          = @{ value = $ClientSecretDays }
             grantEnvironmentJoin      = @{ value = $grantEnvironmentJoin }
+            grantGatewayIdentityAssign = @{ value = $grantGatewayIdentityAssign }
         }
     } | ConvertTo-Json -Depth 10 | Set-Content -Path $paramFile -Encoding utf8
     $result = az deployment group create -g $ResourceGroup --template-file (Join-Path $root 'admin-ui\infra\main.bicep') --parameters "@$paramFile" -o json | ConvertFrom-Json

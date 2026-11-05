@@ -16,6 +16,7 @@
 | Desktop documents boolean plugin-upload, marketplace, skill and extension controls, and `claudeAiImport.enabled` and `exportEnabled` booleans. Automatic third-party import is independent and can reactivate tasks and executable plugins. | https://claude.com/docs/third-party/claude-desktop/configuration#claudeaiimport, read 2026-11-04 |
 | The gateway serves explicitly configured Desktop settings through a matched policy's `desktop` block. | https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay, read 2026-11-04 |
 | A customer's **Apply and roll out** answered 403 `LinkedAuthorizationFailed`: the console identity held `Microsoft.App/containerApps/write` on the gateway app but not `Microsoft.App/managedEnvironments/join/action` on its environment. Reproduced on the test installation with a temporary service principal and a throwaway app: Container Apps Contributor on the app alone gave the same 403; after Container Apps Operator on the environment and a new token, the same PUT succeeded. Container Apps Operator could not write the environment (403 `AuthorizationFailed`). The probe app, service principal and role assignments were deleted. | Customer screenshot, 2026-11-05; probe on rg-claude-gw-p45-existing, 2026-11-05; https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator |
+| A subsequent **Apply and roll out** answered 403 `LinkedAuthorizationFailed` for `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` on `id-claude-gw`; Managed Identity Operator (`f1a07417-d97a-45cb-824c-7a7467783830`) includes that action and can be scoped to the identity. | Customer screenshot, 2026-11-05; live role definition via `az role definition list`; https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/identity#managed-identity-operator |
 
 ## Decision
 
@@ -39,12 +40,17 @@
   with `managedEnvironments/join/action`; it has no write on the environment or any app. Settings > Permissions
   reports the grant as its own item, and the configuration editor is read-only with that reason while it is missing.
   An existing install receives the grant with one role-assignment command; the image-only update does not grant roles.
+- Amendment, 2026-11-05: `main.bicep` also assigns **Managed Identity Operator** on the gateway's user-assigned
+  identity, granting `userAssignedIdentities/assign/action` without write access to the identity. The deployment
+  skips this assignment when the console identity already holds the role. Settings > Permissions checks every
+  user-assigned identity attached to the gateway app, and the configuration editor is read-only while any lacks
+  assign/action. Existing installs grant the role on `id-claude-gw`.
 
 ## Verification
 
 T-165 covers same-origin browser writes and retained cross-site/non-admin refusals. T-166 uses Microsoft's
 published role patterns and exclusions. T-167 covers strict Desktop validation, per-role rendering and the reviewed
 editor. T-168 covers image-only update planning and preservation. T-169 covers the environment join grant and its
-Permissions item. Playwright exercises actual page interactions;
+Permissions item. T-170 covers the user-assigned identity grant and its Permissions item. Playwright exercises actual page interactions;
 local authentication fixtures are labelled simulations, not proof of Azure Authentication behavior. Live evidence
 identifies the authorized test installation; customer deployment verification is not claimed without access.

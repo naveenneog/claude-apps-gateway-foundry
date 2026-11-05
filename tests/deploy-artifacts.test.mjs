@@ -338,6 +338,22 @@ test('T-169 admin-ui main.bicep: Container Apps Operator on the gateway environm
   assert.match(deploy, /if \(\$existingPrincipal -and \$environmentId\)/, 'an empty --assignee or --scope would widen the list (Azure CLI)');
 });
 
+test('T-170 admin-ui main.bicep: Managed Identity Operator on the gateway identity, for the linked assign check', () => {
+  const bicep = read('admin-ui/infra/main.bicep');
+  const block = bicep.replace(/\r\n/g, '\n').split(/^(?=resource )/m)
+    .find((b) => /^resource \w+ 'Microsoft\.Authorization\/roleAssignments@/.test(b) && b.includes("'f1a07417-d97a-45cb-824c-7a7467783830'"));
+  assert.ok(block, 'a role assignment of Managed Identity Operator (f1a07417-...)');
+  assert.match(block, /^\s*scope: gatewayIdentity$/m, 'scoped to the gateway identity only');
+  assert.match(bicep, /resource gatewayIdentity 'Microsoft\.ManagedIdentity\/userAssignedIdentities@[^']+' existing = \{ name: gatewayIdentityName \}/);
+  assert.match(bicep, /param gatewayIdentityName string = 'id-claude-gw'/);
+  assert.match(block, /^resource gatewayIdentityAssigner 'Microsoft\.Authorization\/roleAssignments@[^']+' = if \(grantGatewayIdentityAssign\) \{/);
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(deploy, /gatewayIdentityName\s+= @\{ value = \$GatewayIdentityName \}/);
+  assert.match(deploy, /grantGatewayIdentityAssign\s+= @\{ value = \$grantGatewayIdentityAssign \}/);
+  assert.match(deploy, /az role assignment list --assignee \$existingPrincipal --scope \$gatewayIdentityId --role f1a07417-d97a-45cb-824c-7a7467783830/);
+  assert.match(deploy, /if \(\$existingPrincipal -and \$identityPrincipal -and \$gatewayIdentityId\)/, 'an empty assignee or scope cannot widen the list');
+});
+
 test('T-104 T-146 Deploy-AdminUi.ps1 grants four Graph permissions, never User.ReadWrite.All, and makes admin-ui an owner of the gateway app', () => {
   const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
   assert.match(deploy, /@\{ Value = 'Application\.ReadWrite\.OwnedBy'; Id = '18a4783c-866b-4cc7-a460-3d5e5662c884' \}/);

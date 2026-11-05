@@ -32,6 +32,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - **Apply and roll out** no longer fails with 403 `LinkedAuthorizationFailed`: the console identity also receives
   Container Apps Operator on the gateway's Container Apps environment, Settings > Permissions reports it, and the
   update guide gives the command for consoles installed earlier (P-35, ADR-0019 amendment, T-169).
+- Gateway app updates also need `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` on the attached
+  `id-claude-gw` identity. The console now receives Managed Identity Operator scoped to that identity; the permission
+  view and update guide identify the grant for existing installs (P-35, ADR-0019 amendment, T-170).
 - A user-cap subject that the gateway has not recorded requires explicit confirmation, while email lookup continues
   to resolve to the gateway subject. Console update preservation compares JSON structurally, so property ordering
   does not produce a false failure.
