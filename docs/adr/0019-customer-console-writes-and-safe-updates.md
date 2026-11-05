@@ -15,6 +15,7 @@
 | Container Apps Contributor grants `Microsoft.App/containerApps/*/read`, `*/write` and `*/action`; the console's literal slash matcher misses the app-level read/write operations. This is a capability display, not an authorization grant. | https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-contributor; admin-ui/server/capabilities.mjs:13-17, read 2026-11-04 |
 | Desktop documents boolean plugin-upload, marketplace, skill and extension controls, and `claudeAiImport.enabled` and `exportEnabled` booleans. Automatic third-party import is independent and can reactivate tasks and executable plugins. | https://claude.com/docs/third-party/claude-desktop/configuration#claudeaiimport, read 2026-11-04 |
 | The gateway serves explicitly configured Desktop settings through a matched policy's `desktop` block. | https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay, read 2026-11-04 |
+| A customer's **Apply and roll out** answered 403 `LinkedAuthorizationFailed`: the console identity held `Microsoft.App/containerApps/write` on the gateway app but not `Microsoft.App/managedEnvironments/join/action` on its environment. Reproduced on the test installation with a temporary service principal and a throwaway app: Container Apps Contributor on the app alone gave the same 403; after Container Apps Operator on the environment and a new token, the same PUT succeeded. Container Apps Operator could not write the environment (403 `AuthorizationFailed`). The probe app, service principal and role assignments were deleted. | Customer screenshot, 2026-11-05; probe on rg-claude-gw-p45-existing, 2026-11-05; https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator |
 
 ## Decision
 
@@ -33,11 +34,17 @@
   replacing omitted authentication, secret, ingress and environment settings. Its plan identifies the target and
   image; before/after checks verify those settings are preserved. No gateway database, budget, identity assignment,
   app registration or scheduled job is recreated. The previous image is the rollback target.
+- Amendment, 2026-11-05: `main.bicep` also assigns the console identity **Container Apps Operator**
+  (`f3bd1b5c-91fa-40e7-afe7-0c11d331232c`) on the gateway's Container Apps environment, the smallest built-in role
+  with `managedEnvironments/join/action`; it has no write on the environment or any app. Settings > Permissions
+  reports the grant as its own item, and the configuration editor is read-only with that reason while it is missing.
+  An existing install receives the grant with one role-assignment command; the image-only update does not grant roles.
 
 ## Verification
 
 T-165 covers same-origin browser writes and retained cross-site/non-admin refusals. T-166 uses Microsoft's
 published role patterns and exclusions. T-167 covers strict Desktop validation, per-role rendering and the reviewed
-editor. T-168 covers image-only update planning and preservation. Playwright exercises actual page interactions;
+editor. T-168 covers image-only update planning and preservation. T-169 covers the environment join grant and its
+Permissions item. Playwright exercises actual page interactions;
 local authentication fixtures are labelled simulations, not proof of Azure Authentication behavior. Live evidence
 identifies the authorized test installation; customer deployment verification is not claimed without access.

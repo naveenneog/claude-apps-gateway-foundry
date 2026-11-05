@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleApi } from './api.mjs';
 import { createArmClient } from './arm-client.mjs';
-import { capabilities, tokenRoles } from './capabilities.mjs';
+import { capabilities, environmentPermissions, tokenRoles } from './capabilities.mjs';
 import { buildChargeback, chargebackCsv, collectEffective, findUser, listBusinessUnits, PERIODS } from './chargeback.mjs';
 import { createConfigStore } from './gateway-config.mjs';
 import { createGraphClient } from './graph-client.mjs';
@@ -131,6 +131,10 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
       armPermissions: async () => {
         if (!arm) throw new Error('GATEWAY_RESOURCE_ID is not set, so admin-ui has no gateway app to check');
         return (await arm('GET', `${resourceId}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`)).json?.value ?? [];
+      },
+      environmentPermissions: async () => {
+        if (!arm) throw new Error('GATEWAY_RESOURCE_ID is not set, so admin-ui has no gateway environment to check');
+        return environmentPermissions({ arm, resourceId });
       },
     }),
     log,

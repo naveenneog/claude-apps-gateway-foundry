@@ -79,7 +79,7 @@ With sign-in on, every route below also needs `AdminUi.Admin`.
 | `GET /api/me` | Sign-in only; reports the user, the roles received and `isAdmin` |
 | `GET /api/capabilities` | — |
 | `GET /api/gateway-config`, `POST /api/gateway-config/preview`, `GET /api/gateway-config/rollout` | `GATEWAY_RESOURCE_ID` |
-| `PUT /api/gateway-config` | `AdminUi.Admin`, Container Apps Contributor on the gateway app |
+| `PUT /api/gateway-config` | `AdminUi.Admin`, Container Apps Contributor on the gateway app, Container Apps Operator on its environment |
 | `GET /api/roles` / `POST /api/roles` | `Application.Read.All` / `AdminUi.Admin` and `Application.ReadWrite.OwnedBy` |
 | `GET /api/chargeback?period=&groupBy=&format=csv` | `User.Read.All` |
 | `GET /api/business-units` | `User.Read.All`, `Application.Read.All` |
@@ -120,7 +120,10 @@ When an earlier install left it on the identity, `Deploy-AdminUi.ps1` prints the
 
 The Bicep template also gives the identity **Container Apps Contributor** (`358470bc-b998-42bd-ab17-a7e34c199c0f`)
 on the gateway's container app only, so it can write the `gateway-config` secret
-([built-in roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-contributor)).
+([built-in roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-contributor)),
+and **Container Apps Operator** (`f3bd1b5c-91fa-40e7-afe7-0c11d331232c`) on the gateway's Container Apps environment,
+because Azure checks `Microsoft.App/managedEnvironments/join/action` there on every update of the gateway app
+(ADR-0019; [Container Apps Operator](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator)).
 
 Azure RBAC and admin role assignments have Portal workflows:
 

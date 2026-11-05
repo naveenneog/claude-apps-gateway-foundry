@@ -318,6 +318,26 @@ test('T-104 admin-ui main.bicep: Container Apps Contributor scoped to the gatewa
   assert.match(bicep, /@allowed\(\[ 'test', 'private' \]\)\s*\nparam gatewayTopology string/);
 });
 
+// T-169 (ADR-0019 amendment): a full PUT of the gateway app is also authorised against the environment it names
+// (LinkedAuthorizationFailed, Microsoft.App/managedEnvironments/join/action), and a role scoped to the app alone does
+// not reach the environment. Container Apps Operator is the smallest built-in role with join; it has no write.
+test('T-169 admin-ui main.bicep: Container Apps Operator on the gateway environment, for the linked join check', () => {
+  const bicep = read('admin-ui/infra/main.bicep');
+  const block = bicep.replace(/\r\n/g, '\n').split(/^(?=resource )/m)
+    .find((b) => /^resource \w+ 'Microsoft\.Authorization\/roleAssignments@/.test(b) && b.includes("'f3bd1b5c-91fa-40e7-afe7-0c11d331232c'"));
+  assert.ok(block, 'a role assignment of Container Apps Operator (f3bd1b5c-...)');
+  assert.match(block, /^\s*scope: environment$/m, 'scoped to the gateway environment only');
+  assert.doesNotMatch(bicep, /scope: resourceGroup\(\)/, 'never the resource group');
+  // A grant made by hand or in the Portal has a random name; declaring it again under Bicep's name fails with
+  // RoleAssignmentExists, so the deploy skips the assignment when the identity already holds the role there.
+  assert.match(block, /^resource gatewayEnvironmentJoin 'Microsoft\.Authorization\/roleAssignments@[^']+' = if \(grantEnvironmentJoin\) \{/);
+  assert.match(bicep, /param grantEnvironmentJoin bool = true/);
+  const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
+  assert.match(deploy, /grantEnvironmentJoin\s+= @\{ value = \$grantEnvironmentJoin \}/);
+  assert.match(deploy, /az role assignment list --assignee \$existingPrincipal --scope \$environmentId --role f3bd1b5c-91fa-40e7-afe7-0c11d331232c/);
+  assert.match(deploy, /if \(\$existingPrincipal -and \$environmentId\)/, 'an empty --assignee or --scope would widen the list (Azure CLI)');
+});
+
 test('T-104 T-146 Deploy-AdminUi.ps1 grants four Graph permissions, never User.ReadWrite.All, and makes admin-ui an owner of the gateway app', () => {
   const deploy = read('admin-ui/infra/Deploy-AdminUi.ps1');
   assert.match(deploy, /@\{ Value = 'Application\.ReadWrite\.OwnedBy'; Id = '18a4783c-866b-4cc7-a460-3d5e5662c884' \}/);

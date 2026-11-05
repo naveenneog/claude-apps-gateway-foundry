@@ -29,6 +29,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
   refused. The permissions display recognizes the gateway-level actions in Container Apps Contributor instead of
   asking an administrator to grant the role again. User-cap guidance distinguishes gateway subjects from Entra
   object IDs (P-35, ADR-0019).
+- **Apply and roll out** no longer fails with 403 `LinkedAuthorizationFailed`: the console identity also receives
+  Container Apps Operator on the gateway's Container Apps environment, Settings > Permissions reports it, and the
+  update guide gives the command for consoles installed earlier (P-35, ADR-0019 amendment, T-169).
 - A user-cap subject that the gateway has not recorded requires explicit confirmation, while email lookup continues
   to resolve to the gateway subject. Console update preservation compares JSON structurally, so property ordering
   does not produce a false failure.

@@ -279,6 +279,9 @@ test('T-105 the editor is read-only with a reason naming the missing permission'
   assert.match(cv.readOnlyReason({ canWrite: true }, { ...caps, signIn: { mode: 'off', user: null, isAdmin: false } }), /Sign-in is off/);
   assert.match(cv.readOnlyReason({ canWrite: true }, { ...caps, signIn: { mode: 'required', user: { name: 'A' }, isAdmin: false } }), /AdminUi\.Admin/);
   assert.equal(cv.readOnlyReason({ canWrite: false, readOnlyReason: 'From the server.' }, caps), 'From the server.');
+  // T-169: without join on the environment a save answers 403 LinkedAuthorizationFailed, so the editor says why first.
+  assert.match(cv.readOnlyReason({ canWrite: true }, { ...caps, arm: { readGateway: true, writeGateway: true, joinEnvironment: false } }), /Container Apps Operator on the gateway's Container Apps environment/);
+  assert.equal(cv.readOnlyReason({ canWrite: true }, { ...caps, arm: { readGateway: true, writeGateway: true, joinEnvironment: true } }), null);
 });
 
 test('T-105 a configuration that cannot be read names the missing Azure role first, and keeps the server message', () => {

@@ -216,6 +216,15 @@ if (-not $EnableSignIn) {
 }
 
 $identityPrincipalId = $null
+# ADR-0019: Container Apps Operator on the environment may already exist under another name (a Portal or CLI grant);
+# Bicep declaring it again fails with RoleAssignmentExists, so it is declared only when the identity lacks it.
+$grantEnvironmentJoin = $true
+$existingPrincipal = (az identity show -g $ResourceGroup -n id-admin-ui --query principalId -o tsv 2>$null)
+$environmentId = (az containerapp env show -g $ResourceGroup -n $EnvironmentName --query id -o tsv 2>$null)
+if ($existingPrincipal -and $environmentId) {
+    $held = @(az role assignment list --assignee $existingPrincipal --scope $environmentId --role f3bd1b5c-91fa-40e7-afe7-0c11d331232c -o json 2>$null | ConvertFrom-Json)
+    if ($held.Count -gt 0) { $grantEnvironmentJoin = $false; Write-Host '  Container Apps Operator on the environment: already assigned' }
+}
 Step 'Deploy Bicep' {
     $paramFile = [IO.Path]::GetTempFileName()
     @{
@@ -242,6 +251,7 @@ Step 'Deploy Bicep' {
             gatewayApplicationObjectId = @{ value = $gatewayAppObjectId }
             signInCertificateMonths   = @{ value = $CredentialValidityMonths }
             signInSecretDays          = @{ value = $ClientSecretDays }
+            grantEnvironmentJoin      = @{ value = $grantEnvironmentJoin }
         }
     } | ConvertTo-Json -Depth 10 | Set-Content -Path $paramFile -Encoding utf8
     $result = az deployment group create -g $ResourceGroup --template-file (Join-Path $root 'admin-ui\infra\main.bicep') --parameters "@$paramFile" -o json | ConvertFrom-Json

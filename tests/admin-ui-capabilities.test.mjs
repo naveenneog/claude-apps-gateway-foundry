@@ -3,7 +3,7 @@
 // (https://learn.microsoft.com/en-us/rest/api/authorization/permissions/list-for-resource).
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { actionAllowed, capabilities, tokenRoles } from '../admin-ui/server/capabilities.mjs';
+import { actionAllowed, capabilities, environmentPermissions, tokenRoles } from '../admin-ui/server/capabilities.mjs';
 
 const jwt = (claims) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
 
@@ -35,7 +35,7 @@ test('T-166 the published Container Apps Contributor patterns include the gatewa
   }
   const result = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: async () => permissions,
     signIn: { mode: 'required', isAdmin: true } });
-  assert.deepEqual(result.arm, { readGateway: true, writeGateway: true });
+  assert.deepEqual(result.arm, { readGateway: true, writeGateway: true, joinEnvironment: false });
   assert.equal(actionAllowed(permissions, 'Microsoft.App/jobs/write'), false);
   assert.equal(actionAllowed(permissions, 'Microsoft.App/containerAppsOther/write'), false);
 });
@@ -55,15 +55,16 @@ test('T-102 each capability is granted exactly when its Graph role or ARM action
   const none = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: async () => [], signIn });
   assert.ok(none.items.every((i) => i.key === 'signIn' || i.granted === false), JSON.stringify(none.items));
   assert.deepEqual(none.graph, { readUsers: false, assignRoles: false, readApps: false, writeOwnedApps: false });
-  assert.deepEqual(none.arm, { readGateway: false, writeGateway: false });
+  assert.deepEqual(none.arm, { readGateway: false, writeGateway: false, joinEnvironment: false });
 
   const all = await capabilities({
     graphToken: async () => jwt({ roles: ['User.Read.All', 'AppRoleAssignment.ReadWrite.All', 'Application.Read.All', 'Application.ReadWrite.OwnedBy', 'User.ReadWrite.All'] }),
     armPermissions: async () => [{ actions: ['Microsoft.App/containerApps/*'], notActions: [] }],
+    environmentPermissions: async () => [{ actions: ['Microsoft.App/managedEnvironments/join/action'], notActions: [] }],
     signIn,
   });
   assert.deepEqual(all.graph, { readUsers: true, assignRoles: true, readApps: true, writeOwnedApps: true });
-  assert.deepEqual(all.arm, { readGateway: true, writeGateway: true });
+  assert.deepEqual(all.arm, { readGateway: true, writeGateway: true, joinEnvironment: true });
   for (const item of all.items) {
     assert.equal(typeof item.label, 'string');
     assert.ok(item.unlocks.length > 10, item.key);
@@ -71,7 +72,7 @@ test('T-102 each capability is granted exactly when its Graph role or ARM action
   }
 
   const readOnlyArm = await capabilities({ graphToken: async () => jwt({ roles: ['User.ReadWrite.All'] }), armPermissions: async () => [{ actions: ['*/read'], notActions: [] }], signIn });
-  assert.deepEqual(readOnlyArm.arm, { readGateway: true, writeGateway: false }, 'write also needs listSecrets/action and write');
+  assert.deepEqual(readOnlyArm.arm, { readGateway: true, writeGateway: false, joinEnvironment: false }, 'write also needs listSecrets/action and write');
   assert.equal(readOnlyArm.graph.readUsers, true, 'User.ReadWrite.All includes reading users');
 });
 
@@ -89,6 +90,39 @@ test('T-102 permission help uses Azure Portal steps where available and does not
   assert.match(how['graph.readUsers'], /no.*Portal.*workflow|Portal.*not.*available/i);
   assert.match(how['graph.readUsers'], /graph\/permissions-grant-via-msgraph/);
   assert.doesNotMatch(JSON.stringify(r.items), /pwsh -File|Deploy-AdminUi\.ps1/);
+});
+
+test('T-169 saving also needs join on the gateway environment, reported as its own item with the Operator grant', async () => {
+  const signIn = { mode: 'required', isAdmin: true };
+  const app = async () => [{ actions: ['Microsoft.App/containerApps/*'], notActions: [] }];
+  const missing = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: app, environmentPermissions: async () => [{ actions: ['*/read'] }], signIn });
+  assert.equal(missing.arm.joinEnvironment, false);
+  const item = missing.items.find((i) => i.key === 'arm.joinEnvironment');
+  assert.equal(item.granted, false);
+  assert.match(item.howToGrant, /Container Apps environment.*Access control \(IAM\).*Container Apps Operator.*id-admin-ui/);
+  const operator = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: app, signIn,
+    environmentPermissions: async () => [{ actions: ['Microsoft.App/managedEnvironments/read', 'Microsoft.App/managedEnvironments/join/action'] }] });
+  assert.equal(operator.arm.joinEnvironment, true);
+  const failed = await capabilities({ graphToken: async () => jwt({ roles: [] }), armPermissions: app, signIn, environmentPermissions: async () => { throw new Error('no environment'); } });
+  assert.equal(failed.arm.joinEnvironment, false);
+  assert.ok(failed.problems.some((p) => /gateway environment: no environment/.test(p)));
+});
+
+test('T-169 environmentPermissions reads the environment the gateway app names, and refuses anything but an environment resource ID', async () => {
+  const env = '/subscriptions/s1/resourceGroups/rg-1/providers/Microsoft.App/managedEnvironments/cae-claude-gw';
+  const calls = [];
+  const armFor = (environmentId) => async (method, path) => {
+    calls.push(path);
+    if (path.includes('/providers/Microsoft.Authorization/permissions')) return { json: { value: [{ actions: ['x'] }] } };
+    return { json: { properties: { managedEnvironmentId: environmentId } } };
+  };
+  assert.deepEqual(await environmentPermissions({ arm: armFor(env), resourceId: '/subscriptions/s1/resourceGroups/rg-1/providers/Microsoft.App/containerApps/ca-claude-gw' }), [{ actions: ['x'] }]);
+  assert.equal(calls[1], `${env}/providers/Microsoft.Authorization/permissions?api-version=2022-04-01`);
+  for (const bad of ['https://evil.example/x', `${env}/../../other`, `${env}?x=1`, '/subscriptions/s1/resourceGroups/rg-1/providers/Microsoft.Web/sites/a', undefined]) {
+    calls.length = 0;
+    await assert.rejects(environmentPermissions({ arm: armFor(bad), resourceId: 'r' }), /Container Apps environment/, String(bad));
+    assert.equal(calls.length, 1, `no second request for ${bad}`);
+  }
 });
 
 test('T-102 a failing token or permissions call reports the capability as missing with the reason, not a crash', async () => {

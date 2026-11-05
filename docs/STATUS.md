@@ -4,6 +4,24 @@
 > repository; the public repository holds copies of it as of each published revision, which its commit names
 > (ADR-0006).
 
+**P-35 environment join for Apply (2026-11-05):** The customer's **Apply and roll out** answered 403
+`LinkedAuthorizationFailed`: `id-admin-ui` held Container Apps Contributor on `ca-claude-gw` but not
+`Microsoft.App/managedEnvironments/join/action` on `cae-claude-gw`, which Azure checks on every PUT of the app. The
+Contoso live save of 2026-10-25 (T-106) used the operator's Owner token, so the console identity's own write path had
+not been proven. A probe on Contoso with a temporary service principal reproduced the 403 and showed Container Apps
+Operator on the environment clears it without write on the environment (U-142). Fix (ADR-0019 amendment, T-169):
+`main.bicep` assigns Container Apps Operator scoped to the environment, skipped through `grantEnvironmentJoin` when
+`Deploy-AdminUi.ps1` finds an existing grant; Settings > Permissions reports `arm.joinEnvironment`; the editor is
+read-only with that reason; the update guide gives the one-command grant for existing installs. Contoso `id-admin-ui`
+received the role and admin-ui revision `ca-admin-ui--0000006` (Healthy) reports `joinEnvironment: true`. Not run: a
+full `Deploy-AdminUi.ps1` rerun on Contoso (Graph grants need Privileged Role Administrator); the existence query it
+uses returned 1 there and 0 for the control role. Council: Architect PASS (built-in least-privilege role, scoped to the
+environment, decision recorded as an ADR amendment); Coder BLOCK then PASS (code-review found `RoleAssignmentExists`
+on redeploy after a manual grant; fixed with `grantEnvironmentJoin` and a test); QA PASS (RED quoted in TEST-PLAN
+T-169; live negative and positive probe); UX PASS (the missing grant is named before Apply, with Portal and CLI steps);
+Security PASS (Operator has no write; the environment ID from ARM is validated before the managed-identity token is
+sent; `--assignee` and `--scope` are checked non-empty before `az role assignment list`).
+
 **P-35 customer remediation (2026-11-04; requested fixes implemented and validated):** The owner authorized fixing and testing console writes,
 the permissions indicator and user onboarding, supported Desktop import/plugin controls, and a safe update for already
 deployed consoles. ADR-0019 supersedes ADR-0011's no-referrer choice: the customer's sanitized HAR and Azure middleware

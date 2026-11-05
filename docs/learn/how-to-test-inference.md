@@ -93,8 +93,8 @@ Tokens are registered with the redaction list and do not appear in it.
 ## Results so far
 
 The runs of 2026-09-28 are in docs/TEST-PLAN.md, sections "Results — inference suite, 2026-09-28"
-(docs/TEST-PLAN.md:252), "Results — inference suite, 2026-09-28, after council round 2" (docs/TEST-PLAN.md:297) and
-"Results — inference suite, 2026-09-28, live, after sign-in" (docs/TEST-PLAN.md:308):
+(docs/TEST-PLAN.md:252), "Results — inference suite, 2026-09-28, after council round 2" (docs/TEST-PLAN.md:298) and
+"Results — inference suite, 2026-09-28, live, after sign-in" (docs/TEST-PLAN.md:309):
 
 - Before a browser sign-in, every gateway check was BLOCKED. The APIM route
   (`https://apim-claude-gw-fzgql9.azure-api.net/claude`), `claude-sonnet-5`, 20 streamed prompts, had no failures:

@@ -84,6 +84,9 @@ param signInCertificateMonths int = 12
 @maxValue(365)
 param signInSecretDays int = 365
 
+@description('ADR-0019: assigns Container Apps Operator on the environment. Deploy-AdminUi.ps1 passes false when the identity already holds it there, because a grant made in the Portal has another name and a second one fails with RoleAssignmentExists.')
+param grantEnvironmentJoin bool = true
+
 resource environment 'Microsoft.App/managedEnvironments@2024-03-01' existing = { name: environmentName }
 
 resource gatewayApp 'Microsoft.App/containerApps@2024-03-01' existing = { name: gatewayAppName }
@@ -118,6 +121,20 @@ resource gatewayConfigWriter 'Microsoft.Authorization/roleAssignments@2022-04-01
   scope: gatewayApp
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '358470bc-b998-42bd-ab17-a7e34c199c0f') // Container Apps Contributor
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// A full PUT of the gateway app is also authorised against the environment it names: ARM answers 403
+// LinkedAuthorizationFailed without Microsoft.App/managedEnvironments/join/action there, and the role above, scoped to
+// the app, does not reach the environment. Container Apps Operator is the smallest built-in role with join; it has no
+// write on the environment or on any app (ADR-0019).
+resource gatewayEnvironmentJoin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantEnvironmentJoin) {
+  name: guid(environment.id, identity.id, 'ContainerAppsOperator')
+  scope: environment
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'f3bd1b5c-91fa-40e7-afe7-0c11d331232c') // Container Apps Operator
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
   }

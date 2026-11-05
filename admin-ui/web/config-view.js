@@ -258,6 +258,7 @@
       if (signIn?.mode === 'off') derived = 'Sign-in is off. Changing the gateway configuration needs admin sign-in with the AdminUi.Admin role.';
       else if (signIn && signIn.isAdmin === false) derived = 'Your account does not hold the AdminUi.Admin role, which changing the gateway configuration needs.';
       else if (capabilities?.arm && capabilities.arm.writeGateway === false) derived = 'admin-ui has no write access to the gateway app. It needs Container Apps Contributor on the gateway app.';
+      else if (capabilities?.arm && capabilities.arm.joinEnvironment === false) derived = "admin-ui cannot apply a change: Azure also needs Container Apps Operator on the gateway's Container Apps environment for id-admin-ui. See Settings > Permissions.";
       if (config?.canWrite === false) return config.readOnlyReason || derived || 'The server reports this configuration as read-only.';
       return derived;
     },

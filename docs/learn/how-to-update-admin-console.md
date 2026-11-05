@@ -60,6 +60,26 @@ instead of replacing the app with an incomplete ARM template.
 After a browser refresh, **Settings > Check again** shows the console's current capabilities. Contributor on the
 gateway app is the expected scope; there is no need to grant Owner or Contributor on the resource group.
 
+**Container Apps Operator on the gateway's Container Apps environment** is also listed. Consoles installed before
+2026-11-05 lack it, and **Apply and roll out** then answers 403 `LinkedAuthorizationFailed` for
+`Microsoft.App/managedEnvironments/join/action`. Azure checks that action on the environment for every update of the
+gateway app. The grant, by an account with Owner or User Access Administrator, is:
+
+```powershell
+$principal = az identity show -g $rg -n id-admin-ui --query principalId -o tsv
+$envId = az containerapp env show -g $rg -n cae-claude-gw --query id -o tsv
+az role assignment create --assignee-object-id $principal --assignee-principal-type ServicePrincipal `
+  --role 'Container Apps Operator' --scope $envId
+```
+
+Container Apps Operator reads the environment and allows join; it does not allow writing the environment or any app
+([Container Apps Operator](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/containers#container-apps-operator)).
+The Azure Portal path is the environment > **Access control (IAM)** > **Add role assignment** > **Container Apps
+Operator** > `id-admin-ui`. A new assignment can take several minutes to apply
+([RBAC troubleshooting](https://learn.microsoft.com/en-us/azure/role-based-access-control/troubleshooting#symptom---role-assignment-changes-are-not-being-detected));
+**Check again** then reports it, and **Apply and roll out** is retried. A later `Deploy-AdminUi.ps1` run finds this
+assignment and does not create a second one, which Azure would refuse with `RoleAssignmentExists`.
+
 **Developers > Grant role** and **Budgets > Set cap** exercise write requests. For a user cap, the email resolves
 after the user's first model request; a manually entered ID is the gateway sign-in subject, not the Entra object ID.
 An HTTP 403 with Azure Authentication's CSRF substatus 60 and an empty Referer is described in
