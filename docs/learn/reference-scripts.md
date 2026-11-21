@@ -215,6 +215,29 @@ and removes rules for addresses the app no longer has; other rules are kept (ADR
 | `--gateway-app` | The gateway Container App's name; default `ca-claude-gw` |
 | `--check` | Changes nothing; exits 1 when the rules differ from the app's addresses |
 
+### upgrade-gateway.mjs
+
+Replaces only the `gateway` container image of a deployed gateway and keeps its data (ADR-0021, P-51). Before the
+swap it records our `admin_console` schema by a read-only SQL transaction, the gateway's table list and migration
+versions, and the spend caps, audit events and monthly spend through the documented admin API; after the new revision
+is ready it records them again and compares (scripts/admin/gateway-upgrade.mjs:69-101, scripts/admin/gateway-upgrade.mjs:113-151).
+A failed revision, a changed or missing item, a failed check or a changed app setting swaps the previous image back
+(scripts/admin/gateway-upgrade.mjs:196-205). It refuses a gateway on the in-app database, which a new revision
+empties (scripts/admin/upgrade-gateway.mjs:58). Exit code 0 for `upgraded`, `unchanged` or `plan`; 1 for `stopped`,
+`failed` or `rolled-back`; 2 for an error that stops it, such as an invalid argument, or for a temporary firewall rule it could not
+remove (scripts/admin/upgrade-gateway.mjs:160-175).
+
+| Option | Meaning |
+|---|---|
+| `--resource-group` | The gateway's resource group; required |
+| `--app` | The gateway Container App's name; default `ca-claude-gw` |
+| `--image` | The target, `<registry>/claude-gateway@sha256:<64 hex>` in the registry the app already uses; refused with `--build` |
+| `--build` | Builds `infra/azure-test/image` at its pinned Claude Code version with ACR Tasks and uses the resulting digest; refused with `--image` |
+| `--profile` | A signed-in developer profile folder (`Install-ClaudeGatewayProfile.ps1`); adds inference and `/user/bootstrap` checks, connectors and marketplace count. Windows only |
+| `--temporary-firewall` | `<ipv4>` or `<ipv4>-<ipv4>`: adds the database firewall rule `upgrade-gateway-temporary` for the run and removes it at the end |
+| `--plan` | Takes the snapshot before the upgrade and prints the target and rollback command; builds and changes nothing |
+| `--no-rollback` | On a failure, keeps the new image and prints the rollback command instead of running it |
+
 ## Installer script
 
 ### Install-ClaudeGateway.ps1
@@ -341,7 +364,9 @@ The parameters and their defaults are in `admin-ui/infra/Deploy-AdminUi.ps1`, li
 ### Update-AdminUi.ps1
 
 `admin-ui/infra/Update-AdminUi.ps1` updates only the existing console image and verifies preserved settings and revision
-health. It makes no gateway, database, app-registration or permission changes
+health. After the console is Healthy, it moves the scheduled jobs `job-spend-pacer` and `job-signin-renewer`, when
+present and running an `admin-ui` image from the same registry, to the same digest, printing each job's rollback
+command first and checking its settings after. It makes no gateway, database, app-registration or permission changes
 ([update an existing console](how-to-update-admin-console.md)).
 
 | Parameter | Meaning |
@@ -349,7 +374,7 @@ health. It makes no gateway, database, app-registration or permission changes
 | `-ResourceGroup` | Required. The existing console and registry's resource group |
 | `-AppName` | Existing console Container App; default `ca-admin-ui` |
 | `-ImageTag` | Build tag; default `update-` followed by the current UTC timestamp. Deployment uses the resulting digest |
-| `-Plan` | Reads the target and prints the plan; builds and updates nothing |
+| `-Plan` | Reads the target and its scheduled jobs and prints the plan; builds and updates nothing |
 
 ## Test scripts
 

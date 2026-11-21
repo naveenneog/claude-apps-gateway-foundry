@@ -113,6 +113,28 @@ Amounts are the gateway's list-price estimates for the period, not the Azure inv
 
 ![The Help page with the topic "Create a department (business unit)" open.](media/admin-console-help.png)
 
+## Report a past period
+
+The gateway's own API returns only the period in progress, and the gateway keeps its spend counters for 13 months
+([Spend limits, Data lifecycle](https://code.claude.com/docs/en/claude-apps-gateway-spend-limits)). The console keeps
+its own copy in the table `admin_console.spend_history` of the same managed database (ADR-0021):
+
+- Every run of the job `job-spend-pacer` (every 5 minutes) records each user's day, ISO week and month totals from the
+  gateway's API, and copies the gateway's `spend` table while that table still has the columns and period keys
+  measured in U-156 (admin-ui/server/pacer-job.mjs:131, admin-ui/server/spend-history.mjs:55).
+- A total only grows: a later, smaller value never replaces a larger one, and rows are never deleted
+  (admin-ui/server/spend-history.mjs:20).
+- History therefore starts at the oldest period still in the gateway's table on the first run (2026-10-25 on the test
+  deployment), and is kept after the gateway drops it.
+
+To report one, **Chargeback** > **Period** > **Showing**, then pick a closed month, week or day
+(admin-ui/web/chargeback-page.js:14). **Export CSV** names the file after that period, for example
+`chargeback-monthly-2026-10-department.csv`. The current period still comes from the gateway's API; a future period is
+refused (admin-ui/server/chargeback.mjs:45).
+
+History needs the managed database option. On the in-app database the **Showing** list holds the current period only,
+with the reason next to it.
+
 ## Related content
 
 - [Manage users, groups and budgets](how-to-manage-users-and-groups.md)

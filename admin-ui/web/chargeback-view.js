@@ -14,9 +14,9 @@
     { value: 'role', label: 'Gateway role', noun: 'gateway role' },
   ];
   const PERIODS = [
-    { value: 'monthly', label: 'Month to date' },
-    { value: 'weekly', label: 'Week to date' },
-    { value: 'daily', label: 'Today' },
+    { value: 'monthly', label: 'Monthly', current: 'Month to date' },
+    { value: 'weekly', label: 'Weekly', current: 'Week to date' },
+    { value: 'daily', label: 'Daily', current: 'Today' },
   ];
   // The five business-unit tags (admin-ui/server/user-tags.mjs), each 1 to 64 characters; gateway role is not a tag.
   const TAGS = [
@@ -51,10 +51,25 @@
     return `${Number.isInteger(n) ? n : n.toFixed(1)}%`;
   };
 
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  // The current period (value '') then each closed period with history (GET /api/chargeback/periods), newest first.
+  function periodChoices(period, keys) {
+    const current = PERIODS.find((p) => p.value === period)?.current ?? period;
+    const label = (k) => {
+      const m = /^(\d{4})-(\d{2})$/.exec(k);
+      if (m) return `${MONTHS[Number(m[2]) - 1]} ${m[1]}`;
+      const w = /^(\d{4})-W(\d{2})$/.exec(k);
+      if (w) return `Week ${Number(w[2])}, ${w[1]}`;
+      return k;
+    };
+    return [{ value: '', label: current }, ...(keys ?? []).map((k) => ({ value: k, label: label(k) }))];
+  }
+
   const chargebackView = {
     TAGS,
     GROUP_BY,
     PERIODS,
+    periodChoices,
     formatUsd,
     groupLabel,
 
@@ -159,9 +174,10 @@
       };
     },
 
-    dataHref(period, groupBy) { return `/api/chargeback?period=${encodeURIComponent(period)}&groupBy=${encodeURIComponent(groupBy)}`; },
-    csvHref(period, groupBy) { return `/api/chargeback?format=csv&period=${encodeURIComponent(period)}&groupBy=${encodeURIComponent(groupBy)}`; },
-    csvFileName(period, groupBy, generatedAt) {
+    dataHref(period, groupBy, key) { return `/api/chargeback?period=${encodeURIComponent(period)}&groupBy=${encodeURIComponent(groupBy)}${key ? `&key=${encodeURIComponent(key)}` : ''}`; },
+    csvHref(period, groupBy, key) { return `/api/chargeback?format=csv&period=${encodeURIComponent(period)}&groupBy=${encodeURIComponent(groupBy)}${key ? `&key=${encodeURIComponent(key)}` : ''}`; },
+    csvFileName(period, groupBy, generatedAt, key) {
+      if (key) return `chargeback-${period}-${key}-${groupBy}.csv`;
       const day = /^\d{4}-\d{2}-\d{2}/.exec(String(generatedAt ?? ''))?.[0] ?? 'report';
       return `chargeback-${period}-${groupBy}-${day}.csv`;
     },

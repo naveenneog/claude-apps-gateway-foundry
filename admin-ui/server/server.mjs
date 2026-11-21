@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { handleApi } from './api.mjs';
 import { createArmClient } from './arm-client.mjs';
 import { capabilities, environmentPermissions, gatewayIdentityPermissions, tokenRoles } from './capabilities.mjs';
-import { buildChargeback, chargebackCsv, collectEffective, findUser, listBusinessUnits, PERIODS } from './chargeback.mjs';
+import { buildChargeback, chargebackCsv, chargebackRows, collectEffective, findUser, listBusinessUnits, PERIODS } from './chargeback.mjs';
+import { createHistoryStore } from './spend-history.mjs';
+import { periodKeys, PERIOD_FIELD } from '../../scripts/admin/spend-periods.mjs';
 import { createConfigStore } from './gateway-config.mjs';
 import { createGraphClient } from './graph-client.mjs';
 import { createSignInCredential } from './signin-credential.mjs';
@@ -81,6 +83,10 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
   const tags = createTagStore({
     credential: async () => (arm ? gatewayDatabase({ arm, resourceId }) : { unavailable: true, reason: 'GATEWAY_RESOURCE_ID is not set, so admin-ui has no gateway app to read the database from.' }),
   });
+  // ADR-0021: chargeback history in our own schema of the same managed database, written by job-spend-pacer.
+  const history = createHistoryStore({
+    credential: async () => (arm ? gatewayDatabase({ arm, resourceId }) : { unavailable: true, reason: 'GATEWAY_RESOURCE_ID is not set, so admin-ui has no gateway app to read the database from.' }),
+  });
   const tagsOrReason = async () => {
     const status = await tags.status();
     if (!status.available) return { unavailable: true, reason: status.reason };
@@ -113,8 +119,17 @@ export function buildDeps({ env = process.env, fetchImpl = fetch, log = console.
     signInCredential: arm && env.GATEWAY_APPLICATION_OBJECT_ID ? createSignInCredential({ arm, graph, resourceId, applicationId: env.GATEWAY_APPLICATION_OBJECT_ID,
       months: Number(env.SIGNIN_CERTIFICATE_MONTHS || 12), secretDays: Number(env.SIGNIN_SECRET_DAYS || 365) }) : undefined,
     chargeback: {
-      build: async ({ period, groupBy }) => buildChargeback({ rows: PERIODS.includes(period) ? await collectEffective({ gateway, period }) : [], graph, period, groupBy, tags: await tagsOrReason() }),
+      build: async ({ period, groupBy, key }) => {
+        const currentKey = periodKeys(new Date())[PERIOD_FIELD[period]];
+        const rows = PERIODS.includes(period) ? await chargebackRows({ period, key, currentKey,
+          effective: () => collectEffective({ gateway, period }), history: (k) => history.rows(period, k) }) : [];
+        return buildChargeback({ rows, graph, period, groupBy, tags: await tagsOrReason(), key: key && key !== currentKey ? key : null });
+      },
       csv: chargebackCsv,
+      periods: async (period) => {
+        if (!PERIODS.includes(period)) throw Object.assign(new Error(`period must be one of ${PERIODS.join(', ')}`), { status: 400 });
+        return history.periods(period, periodKeys(new Date())[PERIOD_FIELD[period]]);
+      },
     },
     businessUnits: {
       list: async () => listBusinessUnits({ graph, developers: await listDevelopers(developersLive ? await developersLive() : { graph, servicePrincipalId, appRoles }), tags: await tagsOrReason() }),

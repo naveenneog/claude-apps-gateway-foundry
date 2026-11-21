@@ -38,8 +38,18 @@ export async function findUser(graph, email) {
   return byMail.json?.value?.[0] ?? null;
 }
 
-/** The report for one period and grouping. rows: /effective rows (any period; others are ignored). */
-export async function buildChargeback({ rows, graph, period, groupBy, tags, now = () => new Date() }) {
+/**
+ * The rows a report reads: the current period (no key, or the current key) from /effective; a closed period from the
+ * console's history (ADR-0021). A key after the current one is refused.
+ */
+export async function chargebackRows({ period, key, currentKey, effective, history }) {
+  if (!key || key === currentKey) return effective();
+  if (key > currentKey) throw fail(400, `${key} is a future period; the current ${period} period is ${currentKey}`);
+  return history(key);
+}
+
+/** The report for one period and grouping. rows: /effective rows (any period; others are ignored). key: a closed period's key, when rows come from history. */
+export async function buildChargeback({ rows, graph, period, groupBy, tags, key = null, now = () => new Date() }) {
   if (!PERIODS.includes(period)) throw fail(400, `period must be one of ${PERIODS.join(', ')}`);
   if (!GROUP_BY.includes(groupBy)) throw fail(400, `groupBy must be one of ${GROUP_BY.join(', ')}`);
   const mine = rows.filter((r) => r?.scope?.type === 'user' && r.period === period);
@@ -75,10 +85,12 @@ export async function buildChargeback({ rows, graph, period, groupBy, tags, now 
   for (const g of list) g.sharePct = totalCents ? Math.round((g.totalCents / totalCents) * 1000) / 10 : 0;
   out.sort((a, b) => b.spendCents - a.spendCents);
   return {
-    period, groupBy, generatedAt: now().toISOString(), currency: 'USD', totalCents, groups: list, rows: out,
+    period, key, groupBy, generatedAt: now().toISOString(), currency: 'USD', totalCents, groups: list, rows: out,
     notes: [
-      "Amounts are the gateway's own estimates at list price, or at gateway.yaml's pricing overrides, for the current period to date; they are not the Azure invoice.",
-      'The gateway reports the current period only; earlier periods need an OpenTelemetry export kept elsewhere.',
+      key
+        ? `Amounts are the gateway's own estimates at list price, or at gateway.yaml's pricing overrides, for the closed period ${key}, from the console's history in the managed database; they are not the Azure invoice.`
+        : "Amounts are the gateway's own estimates at list price, or at gateway.yaml's pricing overrides, for the current period to date; they are not the Azure invoice.",
+      'Past periods come from the console\'s history in the managed database, kept from when it was first recorded (ADR-0021).',
       `${UNRESOLVED}: no email recorded for the user, or no Entra user with that email. ${UNASSIGNED}: the user has no tag for this classification.`,
       ...(tags && !(tags instanceof Map) && tags.reason ? [tags.reason] : []),
     ],

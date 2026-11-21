@@ -28,6 +28,8 @@
           href: how-to-admin-configure.md
         - name: Connect Claude Code, VS Code and Claude Desktop
           href: how-to-connect-clients.md
+        - name: Give Claude Desktop connectors, plugins, import and network access
+          href: how-to-desktop-plugins-connectors.md
         - name: Run the inference tests
           href: how-to-test-inference.md
         - name: Load test and size the gateway

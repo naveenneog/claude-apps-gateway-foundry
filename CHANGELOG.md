@@ -6,6 +6,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 ## [Unreleased]
 
 ### Added
+- Chargeback history beyond the gateway's 13 months, managed PostgreSQL only. `job-spend-pacer` now also records each user's day, week and month totals in the console's own table `admin_console.spend_history`, and copies the gateway's past `spend` rows while that table matches the measured contract. **Chargeback** > **Showing** reports any closed period recorded there, and **Export CSV** names the file after it (P-50, ADR-0021 amendment, T-184, T-185).
+- `Update-AdminUi.ps1` also moves the console's scheduled jobs (`job-spend-pacer`, `job-signin-renewer`) to the console's new digest-pinned image after the console is verified, checks that no other job setting changed, and prints a rollback command for each job (T-183).
+- `scripts/admin/upgrade-gateway.mjs` upgrades only the gateway's container image to a new Claude Code build (`--build`) or digest (`--image`) on a managed-PostgreSQL deployment. It compares our `admin_console` tables, the gateway's migrations and table list, and caps, audit events and monthly spend from the admin API before and after, runs health, inference and bootstrap checks, and swaps the previous image back on any difference; `--plan` changes nothing (P-51, ADR-0021, T-182).
+- Connectors without automatic client registration, such as Salesforce's hosted MCP server, can be added per role: **Another remote server** > **Sign-in** > **OAuth with your client ID (no secret)** takes the OAuth client ID (Salesforce's Consumer Key) and scopes. Client secrets and secret helpers stay refused (P-35, ADR-0020 amendment 2, T-180).
+- The Desktop connector guide now covers Salesforce's read-only hosted MCP server, its separate Desktop 3P OAuth
+  callback, and Microsoft 365's dedicated local-mode public client and delegated read scopes. The live Contoso
+  record separates successful gateway delivery and endpoint probes from incomplete vendor authentication (P-35).
+- **Access & models > Desktop capabilities** now sets, per role, Claude Desktop connectors (remote MCP servers and the
+  built-in Microsoft 365 and GitHub connectors), organization plugin marketplaces, plugin MCP server allow and block
+  lists, Claude.ai import organizations and Cowork's allowed network hosts. A catalog adds 14 vendor connectors
+  (Atlassian, Notion, Linear, Figma, Microsoft Learn and others), the Anthropic plugin marketplaces and about 55 common
+  developer hosts in one click each. Values that need a secret, a header or a local command are refused and stay with
+  device management (P-35, ADR-0020).
 - `admin-ui\infra\Update-AdminUi.ps1` builds and rolls out only the existing console image, with a read-only `-Plan`,
   settings-preservation checks and the previous image printed for rollback. It does not rerun Entra setup, change
   gateway policies or reset database-backed caps (P-35, ADR-0019).
@@ -25,6 +38,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - The installer leaves the gateway and the admin console open to every address unless told otherwise (P-47, ADR-0017). Access still needs Entra sign-in: a gateway app role for the gateway, `AdminUi.Admin` for the console. `-TesterCidr` limits the gateway and `-AllowedCidr` the console, each on its own; `-NoSignIn` still requires a range. An install made before this change keeps its recorded range, and `-GatewayAllowAnyAddress`/`-ConsoleAllowAnyAddress` reopen it. Verified that the gateway accepts `0.0.0.0/0` in `access_control.allow_cidrs` (U-134).
 
 ### Fixed
+- A connector's **Starts: Off** choice wrote `defaultState`, which the gateway image (Claude Code 2.1.311) refuses at boot, so the next gateway revision failed to activate (the previous revision kept serving). The console no longer offers it and the admin file refuses `defaultState` until the image moves to 2.1.321 or later (U-151, T-181).
+- The live Contoso connector rollout's linked-resource 403 was cleared with the two scoped Azure roles already
+  documented in T-169/T-170. Its invalid existing Foundry backend credential was repaired in place, with a seven-day
+  pilot credential and successful direct/backend gateway health checks; no deployment was deleted (P-35, U-149).
 - Console writes retain a same-origin Referer for Azure Authentication's CSRF check; cross-site requests remain
   refused. The permissions display recognizes the gateway-level actions in Container Apps Contributor instead of
   asking an administrator to grant the role again. User-cap guidance distinguishes gateway subjects from Entra
@@ -38,6 +55,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Ve
 - A user-cap subject that the gateway has not recorded requires explicit confirmation, while email lookup continues
   to resolve to the gateway subject. Console update preservation compares JSON structurally, so property ordering
   does not produce a false failure.
+- The image-only console updater normalizes only known Container Apps defaults and redacted values for secret-backed
+  environment variables. A changed ingress or plain environment value still stops verification (T-176).
 - Budget submission waits for its initial metadata, preventing a successful write followed by a misleading refresh
   error. A synthesized actor returned for an unknown subject is not mistaken for a previously seen user.
 - The gateway app stage now sets a stable SHA-256 of the rendered YAML in `CONFIG_UPDATED_AT`, even before admin-ui has saved. Container Apps does not start a revision for a secret-only change, so the marker starts a revision when config changes and stays stable when it does not. Confirmed live: the `email_claim: preferred_username` secret was present but the old revision still refused sign-in; the new revision loaded it and `session.mint` succeeded (T-164).

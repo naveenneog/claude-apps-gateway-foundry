@@ -508,6 +508,13 @@ input[type="checkbox"]:disabled { opacity: 0.45; cursor: not-allowed; }
 /* Level with the inputs: one label line (12.5px x 1.5) and the field's gap above. */
 .form-actions { display: flex; gap: 8px; padding-top: calc(12.5px * 1.5 + 6px); }
 .form-status:empty { display: none; }
+/* Desktop capabilities card (ADR-0020): one bordered section per connector, marketplace and network list. */
+.desktop-list { gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.desktop-list h4, .desktop-list h5 { margin: 0; }
+.desktop-list h5 { font-size: 12.5px; color: var(--text-muted); }
+.desktop-list .form-actions { flex-wrap: wrap; }
+.desktop-list textarea { width: 100%; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; }
+.desktop-list .cell-problem:empty { display: none; }
 .form-status { margin-bottom: 16px; }
 .stack > .form-status { margin-bottom: 0; }
 

@@ -130,6 +130,7 @@
       Given a reader new to Azure and the gateway, when `tests/learn-docs.test.mjs` reads the Learn articles, then a glossary defines each term with a reference, an admin console article covers every page in the navigation, troubleshooting explains the console and ingress messages, the overview says where each reader starts, and the install article grants the same Graph permissions as `Deploy-AdminUi.ps1` (T-112).
       Given the customer write failures, when an authorized admin uses Budgets and Developers, then same-origin requests retain a Referer and pass authentication, cross-site and non-admin writes stay refused, and Microsoft's documented Contributor patterns display correctly (T-165, T-166; ADR-0019).
       Given existing per-role Desktop policies and a deployed console, when an admin configures supported import/plugin capabilities or updates the console image, then unset capabilities remain unset, invalid input is refused, and image-only rollout preserves gateway data, sign-in, identity, ingress, secrets and environment (T-167, T-168; ADR-0019).
+      Given the owner's approved Contoso live test, when Salesforce and Microsoft 365 connectors are configured, then gateway bootstrap delivery, Desktop application, client egress and authenticated read-only tool results are recorded separately; vendor OAuth access that is unavailable is a blocker, not a passing connector result (U-146 to U-148).
       Depends on: P-33       Unknowns: U-85, U-86, U-87, U-88, U-89, U-90, U-91, U-92, U-93, U-94, U-95
 
 - [ ] P-36 Load test the gateway in `load_test_mode` and size it for 500, 1,000, 2,000, 10,000 and 25,000 developers
@@ -199,6 +200,14 @@
       Given relayed client metrics rolled up per day, user `sub`, surface, model and token type in the managed PostgreSQL by a sidecar that shares the gateway app's 1 vCPU and 2 GiB (ADR-0013), when the Chargeback page and its CSV are built, then each person and business unit shows tokens by type per surface and model and spend by surface split from the gateway's own `/effective` total, with spend no telemetry explains shown as Not attributed (T-127 to T-129, T-132).
       Given the same scripted workload before and after the change on the Contoso managed-database deployment, when Log Analytics `Usage` and `capacity.mjs` are read, then no new table is written, Console-log bytes per inference request stay within 5%, the replica stays 1 vCPU and 2 GiB, the 1,000-developer monthly estimate rises by at most $1, the rollup table stays under 100 MB a year at 1,000 developers, and the requests a replica serves at target utilization stay at least the value the model uses (T-130, T-131, T-133).
       Depends on: P-41, P-38   Unknowns: U-112 to U-119
+
+- [ ] P-50 Spend history for chargeback, managed PostgreSQL only (ADR-0021, amended 2026-11-21)
+      Given the managed database, when `job-spend-pacer` runs (every 5 minutes), then `admin_console.spend_history` gains each user's day, ISO week and month totals from `/effective`, the larger value winning and a period that rolled over during the read skipped; given a `public.spend` table that matches the contract of U-156, then rows changed since the last copy are copied with `source = gateway-table`, and given any column or period-key mismatch, nothing is copied and the mismatch is named; the Chargeback page and CSV report a closed period from `spend_history`, and a future period is refused.
+      Depends on: P-44   Unknowns: U-156, U-159
+
+- [ ] P-51 Gateway image-only upgrade with a data comparison and rollback (ADR-0021, Proposed)
+      Given a new pinned Claude Code version, when the upgrade script runs, then it prints the rollback image, snapshots table list, migration versions and content hashes of the console's data, swaps only the `gateway` image, waits for a Healthy revision, compares the snapshots, runs inference and `/user/bootstrap`, and records the image in the installer state; a difference in any stable hash, a failed revision or a failed check stops with the rollback command.
+      Depends on: P-35   Unknowns: U-157, U-158, U-159
 
 ## Now — M3: Private deployment on Azure (re-planned 2026-09-29)
 

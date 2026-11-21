@@ -149,6 +149,10 @@ const accessEditor = (() => {
               el('option', { value: choice, text, selected: choice === (value === null ? 'default' : String(value)) })));
             return ui.field({ label: `${role}: ${label}`, control });
           })),
+          connectors(s, act, role),
+          marketplaces(s, act, role),
+          patterns(s, act, role),
+          egress(s, act, role),
         ])),
         ...(!roles.length ? [ui.empty('No Desktop-enabled roles', 'Enable Claude Desktop in Role access to configure its capabilities.')] : []),
       ],
@@ -257,6 +261,170 @@ const accessEditor = (() => {
         ]),
       ]),
     });
+  }
+
+  // ADR-0020: remote connectors (MCP servers) for the role. Headers, client secrets and local commands are not offered:
+  // Desktop asks each user to approve those when a gateway delivers them, so they stay with device management.
+  function connectors(s, act, role) {
+    const items = cv().desktopListOf(s.draft, role, 'managedMcpServers');
+    const ro = Boolean(s.readOnly);
+    const name = el('input', { placeholder: 'e.g. Contoso Docs', 'aria-label': `${role}: connector name`, disabled: ro });
+    const url = el('input', { placeholder: 'https://mcp.example.com/mcp', 'aria-label': `${role}: connector URL`, inputmode: 'url', disabled: ro });
+    const transport = el('select', { 'aria-label': `${role}: connector transport`, disabled: ro }, [el('option', { value: 'http', text: 'Streamable HTTP' }), el('option', { value: 'sse', text: 'SSE (legacy)' })]);
+    const signIn = el('select', { 'aria-label': `${role}: connector sign-in`, disabled: ro }, [el('option', { value: 'none', text: 'No sign-in' }), el('option', { value: 'oauth', text: 'OAuth (automatic registration)' }),
+      el('option', { value: 'byo', text: 'OAuth with your client ID (no secret)' })]);
+    const oauthClient = el('input', { placeholder: 'Client ID — e.g. Salesforce Consumer Key', 'aria-label': `${role}: connector OAuth client ID`, disabled: ro });
+    const oauthScope = el('input', { placeholder: 'Scopes, e.g. mcp_api refresh_token', 'aria-label': `${role}: connector OAuth scopes`, disabled: ro });
+    const problem = el('p', { class: 'cell-problem', role: 'alert' });
+    const addEntries = (entries) => {
+      const fresh = entries.filter((e) => !items.some((i) => i.name === e.name));
+      if (!fresh.length) { problem.textContent = 'Already listed.'; return; }
+      act.setDesktopList(role, 'managedMcpServers', [...items, ...fresh], `connector-add|${role}`);
+    };
+    const catalog = globalThis.desktopCatalog?.connectors ?? [];
+    const pick = el('select', { 'aria-label': `${role}: connector from catalog`, disabled: ro }, [
+      el('option', { value: '', text: 'Choose a connector…' }),
+      ...catalog.filter((c) => !items.some((i) => i.name === c.entry.name)).map((c) => el('option', { value: c.entry.name, text: `${c.entry.name} — ${c.note}` })),
+    ]);
+    const addPick = ui.button('Add', { kind: 'secondary', size: 'sm', iconName: 'plus', disabled: ro, 'data-key': `connector-catalog|${role}`, onclick: () => {
+      const found = catalog.find((c) => c.entry.name === pick.value);
+      if (!found) { problem.textContent = 'Choose a connector from the list.'; return; }
+      addEntries([cv().clone(found.entry)]);
+    } });
+    const addAll = ui.button('Add all catalog connectors', { kind: 'ghost', size: 'sm', disabled: ro, onclick: () => addEntries(catalog.map((c) => cv().clone(c.entry))) });
+    const builtinKind = el('select', { 'aria-label': `${role}: built-in connector type`, disabled: ro }, [el('option', { value: 'microsoft365', text: 'Microsoft 365' }), el('option', { value: 'github', text: 'GitHub' })]);
+    const tenant = el('input', { placeholder: 'Directory (tenant) ID — Microsoft 365 only', 'aria-label': `${role}: Microsoft 365 tenant ID`, disabled: ro });
+    const client = el('input', { placeholder: 'Application (client) ID of your app registration', 'aria-label': `${role}: built-in connector client ID`, disabled: ro });
+    const addBuiltin = ui.button('Add built-in', { kind: 'secondary', size: 'sm', iconName: 'plus', disabled: ro, onclick: () => {
+      try { addEntries([cv().builtinConnectorEntry({ server: builtinKind.value, tenantId: tenant.value, clientId: client.value })]); } catch (err) { problem.textContent = err.message; }
+    } });
+    const add = ui.button('Add connector', { kind: 'secondary', size: 'sm', iconName: 'plus', disabled: ro, 'data-key': `connector-add|${role}`, onclick: () => {
+      try {
+        const entry = cv().connectorEntry({ name: name.value, url: url.value, transport: transport.value, oauth: signIn.value === 'byo' ? 'byo' : signIn.value === 'oauth',
+          clientId: oauthClient.value, scope: oauthScope.value });
+        if (items.some((i) => i.name === entry.name)) throw new Error(`${entry.name} is already listed.`);
+        act.setDesktopList(role, 'managedMcpServers', [...items, entry], `connector-add|${role}`);
+      } catch (err) { problem.textContent = err.message; }
+    } });
+    return el('div', { class: 'stack desktop-list' }, [
+      el('h4', { text: 'Connectors (MCP servers)' }),
+      el('p', { class: 'muted small', text: 'MCP servers Claude Desktop adds for this role, as on Claude.ai: users sign in to each service the first time they use it, and can turn a connector off. A tool policy in the admin file can block tools.' }),
+      items.length ? ui.table({
+        caption: `${role} connectors`,
+        columns: [
+          { label: 'Name', render: (c) => el('strong', { text: c.name }) },
+          { label: 'Address', render: (c) => el('code', { text: c.url ?? `built-in: ${c.server}` }) },
+          { label: 'Settings', render: (c) => [c.server ? 'built-in' : c.transport === 'sse' ? 'SSE' : 'HTTP', c.oauth === true ? 'OAuth' : c.oauth ? 'OAuth, own client ID' : null, c.toolPolicy ? 'tool policy' : null].filter(Boolean).join(' · ') },
+          { label: '', className: 'actions', render: (c) => ui.button('Remove', { kind: 'danger', size: 'sm', iconName: 'trash', disabled: ro, 'aria-label': `Remove connector ${c.name} from ${role}`,
+            onclick: () => act.setDesktopList(role, 'managedMcpServers', items.filter((i) => i.name !== c.name), `connector-add|${role}`) }) },
+        ],
+        rows: items,
+      }) : el('p', { class: 'muted small', text: 'No connectors for this role.' }),
+      el('h5', { text: 'From the catalog' }),
+      el('div', { class: 'form-grid' }, [ui.field({ label: 'Connector', control: pick, className: 'wide' }), el('div', { class: 'form-actions' }, [addPick, addAll])]),
+      el('h5', { text: 'Built-in Microsoft 365 or GitHub' }),
+      el('div', { class: 'form-grid' }, [ui.field({ label: 'Connector', control: builtinKind }), ui.field({ label: 'Tenant ID', control: tenant, className: 'wide' }),
+        ui.field({ label: 'Client ID', control: client, className: 'wide' }), el('div', { class: 'form-actions' }, [addBuiltin])]),
+      el('h5', { text: 'Another remote server' }),
+      el('div', { class: 'form-grid' }, [
+        ui.field({ label: 'Name', control: name }), ui.field({ label: 'URL', control: url, className: 'wide' }),
+        ui.field({ label: 'Transport', control: transport }), ui.field({ label: 'Sign-in', control: signIn }),
+        ui.field({ label: 'OAuth client ID', control: oauthClient, className: 'wide' }), ui.field({ label: 'OAuth scopes', control: oauthScope, className: 'wide' }),
+        el('div', { class: 'form-actions' }, [add]),
+      ]),
+      problem,
+    ]);
+  }
+
+  function marketplaces(s, act, role) {
+    const items = cv().desktopListOf(s.draft, role, 'allowedPluginMarketplaces');
+    const ro = Boolean(s.readOnly);
+    const kind = el('select', { 'aria-label': `${role}: marketplace source`, disabled: ro }, [
+      el('option', { value: 'github', text: 'GitHub repository' }), el('option', { value: 'git', text: 'Git URL' }), el('option', { value: 'url', text: 'marketplace.json URL' })]);
+    const value = el('input', { placeholder: 'owner/name or https://…', 'aria-label': `${role}: marketplace location`, disabled: ro });
+    const ref = el('input', { placeholder: 'branch, tag or commit (optional)', 'aria-label': `${role}: marketplace ref`, disabled: ro });
+    const problem = el('p', { class: 'cell-problem', role: 'alert' });
+    const where = (m) => m.repo ?? m.url;
+    const add = ui.button('Add marketplace', { kind: 'secondary', size: 'sm', iconName: 'plus', disabled: ro, 'data-key': `marketplace-add|${role}`, onclick: () => {
+      try {
+        const entry = cv().marketplaceEntry({ kind: kind.value, value: value.value, ref: ref.value });
+        if (items.some((i) => where(i) === where(entry))) throw new Error(`${where(entry)} is already listed.`);
+        act.setDesktopList(role, 'allowedPluginMarketplaces', [...items, entry], `marketplace-add|${role}`);
+      } catch (err) { problem.textContent = err.message; }
+    } });
+    const catalog = globalThis.desktopCatalog?.marketplaces ?? [];
+    const missing = catalog.filter((c) => !items.some((i) => where(i) === where(c.entry)));
+    const addCatalog = ui.button(`Add Anthropic marketplaces (${missing.length})`, { kind: 'ghost', size: 'sm', iconName: 'plus', disabled: ro || !missing.length, 'data-key': `marketplace-catalog|${role}`,
+      title: catalog.map((c) => `${where(c.entry)}: ${c.note}`).join('\n'),
+      onclick: () => act.setDesktopList(role, 'allowedPluginMarketplaces', [...items, ...missing.map((c) => cv().clone(c.entry))], `marketplace-add|${role}`) });
+    return el('div', { class: 'stack desktop-list' }, [
+      el('h4', { text: 'Organization plugin marketplaces' }),
+      el('p', { class: 'muted small', text: 'Public marketplaces shown in Claude Desktop’s Directory, Organization tab. Private marketplaces need a credential and stay with device management.' }),
+      items.length ? ui.table({
+        caption: `${role} plugin marketplaces`,
+        columns: [
+          { label: 'Source', render: (m) => ({ github: 'GitHub', git: 'Git', url: 'marketplace.json' })[m.source] ?? m.source },
+          { label: 'Location', render: (m) => el('code', { text: where(m) }) },
+          { label: 'Ref', render: (m) => m.ref ?? 'default branch' },
+          { label: '', className: 'actions', render: (m) => ui.button('Remove', { kind: 'danger', size: 'sm', iconName: 'trash', disabled: ro, 'aria-label': `Remove marketplace ${where(m)} from ${role}`,
+            onclick: () => act.setDesktopList(role, 'allowedPluginMarketplaces', items.filter((i) => where(i) !== where(m)), `marketplace-add|${role}`) }) },
+        ],
+        rows: items,
+      }) : el('p', { class: 'muted small', text: 'No organization marketplaces for this role.' }),
+      el('div', { class: 'form-grid' }, [ui.field({ label: 'Source', control: kind }), ui.field({ label: 'Location', control: value, className: 'wide' }),
+        ui.field({ label: 'Ref', control: ref }), el('div', { class: 'form-actions' }, [add, addCatalog])]),
+      problem,
+    ]);
+  }
+
+  // Cowork egress: hosts Cowork's sandbox may reach. Empty leaves the gateway's derived list in place.
+  function egress(s, act, role) {
+    const ro = Boolean(s.readOnly);
+    const key = 'coworkEgressAllowedHosts';
+    const focus = `desktop-list|${role}|${key}`;
+    const items = cv().desktopListOf(s.draft, role, key);
+    const problem = el('p', { class: 'cell-problem', role: 'alert' });
+    const area = el('textarea', { rows: 6, disabled: ro, 'aria-label': `${role}: Cowork egress hosts`, 'data-key': focus, spellcheck: 'false' });
+    area.value = items.join('\n');
+    const save = (hosts) => act.setDesktopList(role, key, hosts, focus);
+    area.addEventListener('change', () => { try { save(cv().hostsFrom(area.value)); } catch (err) { problem.textContent = err.message; } });
+    const common = globalThis.desktopCatalog?.egressHosts ?? [];
+    return el('div', { class: 'stack desktop-list' }, [
+      el('h4', { text: 'Cowork network access' }),
+      el('p', { class: 'muted small', text: 'Hosts Cowork’s sandbox may reach, one per line: github.com, *.github.com (subdomains only) or * for all. This list does not govern web search, model requests or connectors. Any list other than * also keeps Claude Code’s sandbox on.' }),
+      ui.field({ label: `Allowed hosts (${items.length})`, control: area, className: 'wide',
+        hint: !items.length && cv().desktopListIsSet(s.draft, role, key) ? 'Set to an empty list in the admin file: Cowork may reach no host. Clear removes the setting.' : 'Empty: the gateway derives the list from its sandbox network settings.' }),
+      el('div', { class: 'form-actions' }, [
+        ui.button(`Add common domains (${common.length})`, { kind: 'secondary', size: 'sm', iconName: 'plus', disabled: ro || !common.length, 'data-key': `egress-common|${role}`,
+          onclick: () => save([...new Set([...items.filter((h) => h !== '*'), ...common])]) }),
+        ui.button('Allow all hosts (*)', { kind: 'ghost', size: 'sm', disabled: ro, onclick: () => save(['*']) }),
+        ui.button('Clear', { kind: 'ghost', size: 'sm', disabled: ro || !cv().desktopListIsSet(s.draft, role, key), onclick: () => save([]) }),
+      ]),
+      problem,
+    ]);
+  }
+
+  // Plugin MCP server limits and the import organization list, one value per line; an empty box leaves the setting unset.
+  function patterns(s, act, role) {
+    const ro = Boolean(s.readOnly);
+    const box = (key, label, hint, toText, fromText, emptyMeans) => {
+      const area = el('textarea', { rows: 3, disabled: ro, 'aria-label': `${role}: ${label}`, 'data-key': `desktop-list|${role}|${key}`, spellcheck: 'false' });
+      const items = cv().desktopListOf(s.draft, role, key);
+      area.value = toText(items);
+      area.addEventListener('change', () => act.setDesktopList(role, key, fromText(area.value), `desktop-list|${role}|${key}`));
+      const explicitEmpty = !items.length && cv().desktopListIsSet(s.draft, role, key);
+      return ui.field({ label, control: area, hint: explicitEmpty ? `Set to an empty list in the admin file: ${emptyMeans}. Saving an empty box removes the setting.` : hint, className: 'wide' });
+    };
+    const lines = (items) => items.join('\n');
+    const uuids = (text) => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    return el('div', { class: 'stack desktop-list' }, [
+      el('h4', { text: 'Plugin servers and import sources' }),
+      el('div', { class: 'form-grid' }, [
+        box('allowedPluginMcpServers', 'Allowed plugin MCP servers', 'One https:// pattern per line, * allowed. Empty: no limit.', cv().patternsText, cv().patternsFrom, 'plugins may start no MCP server'),
+        box('deniedPluginMcpServers', 'Blocked plugin MCP servers', 'One https:// pattern per line. Applies even when the allowed list matches.', cv().patternsText, cv().patternsFrom, 'nothing is blocked'),
+        box('claudeAiImport.allowedOrganizationUuids', 'Claude.ai organizations users may import from', 'One organization UUID per line. Empty: any organization, when import is enabled.', lines, uuids, 'no organization may be imported from'),
+      ]),
+    ]);
   }
 
   return { matrix, admission, models, softLimit, desktop };

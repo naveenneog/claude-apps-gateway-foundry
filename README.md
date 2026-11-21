@@ -21,6 +21,7 @@ including the comparison with the Azure API Management (APIM) gateway.
 | Install a gateway with no public address, reached over VPN or ExpressRoute | [Tutorial: deploy in a network-restricted environment](docs/learn/tutorial-deploy-network-restricted.md) | Longer: it builds the network too |
 | Group developers into departments or cost centers for chargeback, or give a whole team access with an Entra group | [Group developers into departments and teams](docs/learn/how-to-organize-departments.md) | — |
 | Choose what Claude Desktop shows each role (Chat, Cowork, Code) | [Claude Desktop: Chat, Cowork and Code](docs/learn/how-to-admin-configure.md#claude-desktop-chat-cowork-and-code) | — |
+| Give Claude Desktop connectors, plugin marketplaces, Claude.ai import and Cowork network hosts per role | [Desktop connectors, plugins and import](docs/learn/how-to-desktop-plugins-connectors.md) | — |
 | Slow spend down before a monthly cap is reached | [Pace the last part of a monthly cap with a soft limit](docs/learn/how-to-admin-configure.md#pace-the-last-part-of-a-monthly-cap-with-a-soft-limit) | — |
 | Look up a term | [Glossary](docs/learn/glossary.md) | — |
 
@@ -43,6 +44,10 @@ gateway sign-in has not been verified (docs/UNKNOWNS.md, U-21). On an earlier pu
 in and a Claude model answered a prompt. Desktop and a real Claude model answering a prompt have not been verified on
 the latest certificate test gateway (docs/UNKNOWNS.md, U-106; docs/TEST-PLAN.md, T-155). The Intune packages were
 tested locally, but assignment in an Intune tenant has not been tested (docs/UNKNOWNS.md, U-107).
+
+The [connector guide](docs/learn/how-to-desktop-plugins-connectors.md#what-live-verification-establishes) separates
+live gateway delivery, client egress and authenticated vendor tool results. Salesforce needs an org's External
+Client App; Microsoft 365 needs user sign-in and appropriate service access. Configuration alone proves neither.
 
 ## Start the deployment
 

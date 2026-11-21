@@ -160,16 +160,21 @@ async function handleAdr0010(req, deps, principal) {
     return json(200, { ...(await deps.businessUnits.list()), canTag: !refusal && status.available === true, tagsReason: status.available ? null : status.reason ?? null });
   }
 
+  if (pathname === '/api/chargeback/periods' && method === 'GET') {
+    if (!deps.chargeback?.periods) return notConfigured('Chargeback history');
+    return json(200, await deps.chargeback.periods(searchParams.get('period') ?? 'monthly'));
+  }
   if (pathname === '/api/chargeback' && method === 'GET') {
     if (!deps.chargeback) return notConfigured('Chargeback');
     const period = searchParams.get('period') ?? 'monthly';
     const groupBy = searchParams.get('groupBy') ?? 'department';
-    const report = await deps.chargeback.build({ period, groupBy });
+    const key = searchParams.get('key') || null;
+    const report = await deps.chargeback.build({ period, groupBy, ...(key ? { key } : {}) });
     if (searchParams.get('format') === 'csv') {
       const day = new Date().toISOString().slice(0, 10);
       return {
         status: 200, raw: deps.chargeback.csv(report),
-        headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="chargeback-${period}-${groupBy}-${day}.csv"` },
+        headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${key ? `chargeback-${period}-${key}-${groupBy}` : `chargeback-${period}-${groupBy}-${day}`}.csv"` },
       };
     }
     const status = deps.tags ? await deps.tags.status() : { available: false };

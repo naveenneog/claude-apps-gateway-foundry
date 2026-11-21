@@ -176,6 +176,7 @@ const accessPage = (() => {
       toggleModel: (role, id, on) => change(cv.toggleModel(s.draft, role, id, on, s.original)),
       setDesktop: (role, on) => change(cv.setDesktop(s.draft, role, on, s.original)),
       setDesktopSetting: (role, key, value) => change(cv.setDesktopSetting(s.draft, role, key, value), `desktop-setting|${role}|${key}`),
+      setDesktopList: (role, key, items, focusKey) => change(cv.setDesktopList(s.draft, role, key, items), focusKey),
       setSoftLimit: (percent) => change(cv.setSoftLimit(s.draft, percent), percent === null ? 'soft-limit' : 'soft-limit-percent'),
       admit: (role) => {
         const next = cv.admitRole(s.draft, role, s.original);

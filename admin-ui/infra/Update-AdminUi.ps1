@@ -5,6 +5,8 @@
     Builds from this repository, pins the new image by digest and updates only the admin-ui container.
     No Bicep provisioning, app-registration lookup, Graph grant, gateway change or database change runs.
     Prints the previous image for rollback and checks settings and the ready revision after rollout (ADR-0019).
+    Then moves the console's scheduled jobs (job-spend-pacer, job-signin-renewer) that run an admin-ui image from the
+    same registry to the same digest, printing each job's rollback command first and checking its settings after.
 .PARAMETER ResourceGroup
     The resource group containing the existing console and its registry.
 .PARAMETER AppName
@@ -12,7 +14,7 @@
 .PARAMETER ImageTag
     A build tag; the deployed image reference uses its digest, not this mutable tag.
 .PARAMETER Plan
-    Reads the current context and prints the update plan. Builds and updates nothing.
+    Reads the current context, including the scheduled jobs, and prints the update plan. Builds and updates nothing.
 #>
 [CmdletBinding()]
 param(
@@ -57,18 +59,42 @@ function Canonical($Value) {
     if ($Value -is [array]) { return ,@($Value | ForEach-Object { Canonical $_ }) }
     return $Value
 }
+function Get-PreservedTemplate($Resource) {
+    $template = $Resource.properties.template | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+    foreach ($container in $template.containers) {
+        $container.PSObject.Properties.Remove('image')
+        if ($container.imageType -eq 'ContainerImage') { $container.PSObject.Properties.Remove('imageType') }
+        if ($container.resources.ephemeralStorage -eq '1Gi') {
+            $otherResources = @($container.resources.PSObject.Properties.Name | Where-Object { $_ -ne 'ephemeralStorage' })
+            $container.resources.PSObject.Properties.Remove('ephemeralStorage')
+            if ($otherResources.Count -eq 0) { $container.PSObject.Properties.Remove('resources') }
+        }
+        foreach ($envVar in $container.env) {
+            if ($envVar.secretRef) { $envVar.PSObject.Properties.Remove('value') }
+        }
+    }
+    if ($template.revisionSuffix -eq '') { $template.PSObject.Properties.Remove('revisionSuffix') }
+    if ($template.scale.cooldownPeriod -eq 300) { $template.scale.PSObject.Properties.Remove('cooldownPeriod') }
+    if ($template.scale.pollingInterval -eq 30) { $template.scale.PSObject.Properties.Remove('pollingInterval') }
+    return $template
+}
 function Snapshot($App, $Auth) {
-    $template = $App.properties.template | ConvertTo-Json -Depth 100 | ConvertFrom-Json
-    foreach ($container in $template.containers) { $container.PSObject.Properties.Remove('image') }
     Canonical @{
         identity = $App.identity
         configuration = $App.properties.configuration
-        template = $template
+        template = Get-PreservedTemplate $App
         authentication = $Auth
         location = $App.location
         tags = $App.tags
         workloadProfileName = $App.properties.workloadProfileName
     } | ConvertTo-Json -Depth 100 -Compress
+}
+function Get-ChangedSettings([string]$Old, [string]$New) {
+    $oldSettings = $Old | ConvertFrom-Json
+    $newSettings = $New | ConvertFrom-Json
+    @($oldSettings.PSObject.Properties.Name | Where-Object {
+        ($oldSettings.$_ | ConvertTo-Json -Depth 100 -Compress) -cne ($newSettings.$_ | ConvertTo-Json -Depth 100 -Compress)
+    }) -join ', '
 }
 
 $account = Get-AzJson @('account', 'show')
@@ -90,8 +116,34 @@ Write-Host "Target: subscription $($account.id), $ResourceGroup / $AppName"
 Write-Host "Previous image: $previousImage"
 Write-Host "Rollback: az containerapp update -g $ResourceGroup -n $AppName --container-name admin-ui --image $previousImage"
 Write-Host "Build: $registryServer/admin-ui:$ImageTag from $root"
+
+# The console's scheduled jobs (main.bicep) run the same image; only those on an admin-ui image from this registry move.
+$jobDefinitions = [ordered]@{ 'job-spend-pacer' = 'spend-pacer'; 'job-signin-renewer' = 'signin-renewer' }
+$existingJobs = @(Get-AzJson @('containerapp', 'job', 'list', '-g', $ResourceGroup, '--query', '[].name'))
+$jobs = @()
+foreach ($jobName in $jobDefinitions.Keys) {
+    $jobContainerName = $jobDefinitions[$jobName]
+    if ($jobName -cnotin $existingJobs) { Write-Host "Scheduled job ${jobName}: not found in $ResourceGroup; skipped."; continue }
+    $jobBefore = Get-AzJson @('containerapp', 'job', 'show', '-g', $ResourceGroup, '-n', $jobName)
+    if ($jobBefore.id.Split('/')[2] -ne $account.id) { Write-Host "Scheduled job ${jobName}: not in the selected subscription; skipped and unchanged."; continue }
+    $jobContainer = @($jobBefore.properties.template.containers | Where-Object { $_.name -eq $jobContainerName })
+    if ($jobContainer.Count -ne 1) { Write-Host "Scheduled job ${jobName}: no single container named $jobContainerName; skipped and unchanged."; continue }
+    $jobImage = $jobContainer[0].image
+    if ($jobImage -notmatch ('^' + [regex]::Escape($registryServer) + '/admin-ui[:@][A-Za-z0-9:._-]+$')) {
+        Write-Host "Scheduled job ${jobName}: image $jobImage is not an admin-ui image from $registryServer; skipped and unchanged."
+        continue
+    }
+    $jobRollback = "az containerapp job update -g $ResourceGroup -n $jobName --container-name $jobContainerName --image $jobImage"
+    Write-Host "Scheduled job ${jobName} previous image: $jobImage"
+    Write-Host "Rollback ${jobName}: $jobRollback"
+    $jobs += [pscustomobject]@{
+        Name = $jobName; Container = $jobContainerName; PreviousImage = $jobImage; Rollback = $jobRollback
+        Snapshot = Snapshot $jobBefore $null
+    }
+}
 if ($Plan) {
     Write-Host 'Plan only: build a digest-pinned image, update the console image, then check preserved settings and revision health.'
+    Write-Host "Plan only: then move scheduled jobs to the same image and check their settings: $(if ($jobs) { $jobs.Name -join ', ' } else { 'none' })."
     return
 }
 
@@ -122,15 +174,34 @@ if (($after.properties.template.containers | Where-Object { $_.name -eq 'admin-u
 }
 $afterSnapshot = Snapshot $after (Read-Auth)
 if ($afterSnapshot -cne $snapshot) {
-    $oldSettings = $snapshot | ConvertFrom-Json
-    $newSettings = $afterSnapshot | ConvertFrom-Json
-    $differences = @($oldSettings.PSObject.Properties.Name | Where-Object {
-        ($oldSettings.$_ | ConvertTo-Json -Depth 100 -Compress) -cne ($newSettings.$_ | ConvertTo-Json -Depth 100 -Compress)
-    })
-    throw "Console settings changed unexpectedly ($($differences -join ', ')); do not report the update as verified. Review the rollback image above."
+    throw "Console settings changed unexpectedly ($(Get-ChangedSettings $snapshot $afterSnapshot)); do not report the update as verified. Review the rollback image above."
 }
 $revision = Get-AzJson @('containerapp', 'revision', 'show', '-g', $ResourceGroup, '-n', $AppName,
     '--revision', $after.properties.latestReadyRevisionName)
 if ($revision.properties.healthState -ne 'Healthy') { throw 'The new console revision is not Healthy; use the rollback image printed above.' }
+
+$updatedJobs = @()
+foreach ($job in $jobs) {
+    if ($job.PreviousImage -ceq $targetImage) { Write-Host "Scheduled job $($job.Name) already uses $targetImage."; continue }
+    try {
+        Invoke-Az @('containerapp', 'job', 'update', '-g', $ResourceGroup, '-n', $job.Name,
+            '--container-name', $job.Container, '--image', $targetImage, '-o', 'none') | Out-Host
+    } catch {
+        throw "$($_.Exception.Message) Scheduled job $($job.Name) was not verified; roll back with: $($job.Rollback)"
+    }
+    $jobAfter = Get-AzJson @('containerapp', 'job', 'show', '-g', $ResourceGroup, '-n', $job.Name)
+    if ($jobAfter.properties.provisioningState -ne 'Succeeded') {
+        throw "Scheduled job $($job.Name) update did not succeed; roll back with: $($job.Rollback)"
+    }
+    if (@($jobAfter.properties.template.containers | Where-Object { $_.name -eq $job.Container }).image -cne $targetImage) {
+        throw "Scheduled job $($job.Name) image differs from the requested digest; roll back with: $($job.Rollback)"
+    }
+    $jobAfterSnapshot = Snapshot $jobAfter $null
+    if ($jobAfterSnapshot -cne $job.Snapshot) {
+        throw "Scheduled job $($job.Name) settings changed unexpectedly ($(Get-ChangedSettings $job.Snapshot $jobAfterSnapshot)); roll back with: $($job.Rollback)"
+    }
+    $updatedJobs += $job.Name
+}
 Write-Host "$(if ($changed) { 'Update complete' } else { 'Already up to date' }): $($after.properties.latestReadyRevisionName) is Healthy; authentication, ingress, secrets, identity and environment are unchanged."
-Write-Host 'Gateway, database, app registrations, role grants and scheduled jobs were not modified.'
+Write-Host "Scheduled jobs updated: $(if ($updatedJobs) { $updatedJobs -join ', ' } else { 'none' }); their identity, trigger, secrets, registries and environment are unchanged."
+Write-Host 'Gateway, database, app registrations and role grants were not modified.'

@@ -48,7 +48,8 @@ function run(t, args = {}, { failStep, recorded } = {}) {
   const out = `${r.stdout}${r.stderr}`.replace(/\x1B\[[0-9;?]*[A-Za-z]/g, '');
   const stateFile = path.join(state, `${args.ResourceGroup ?? 'rg-test'}.json`);
   const after = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8').replace(/^\uFEFF/, '')) : null;
-  return { status: r.status, out, flat: out.replace(/\s+/g, ' '), calls, after };
+  // PowerShell's error view wraps a message at the console width with "\n     | "; join those lines first.
+  return { status: r.status, out, flat: out.replace(/\r?\n +\| /g, ' ').replace(/\s+/g, ' '), calls, after };
 }
 const stepsRun = (r) => r.calls.map((c) => c.step);
 const argsOf = (r, step) => r.calls.find((c) => c.step === step);

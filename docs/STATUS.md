@@ -4,6 +4,150 @@
 > repository; the public repository holds copies of it as of each published revision, which its commit names
 > (ADR-0006).
 
+**P-50 spend history and a safe console update (2026-11-21):** The owner asked for chargeback history beyond the
+gateway's 13 months, and that an update of a customer's install not break its setup or permissions or erase spend or
+assignment data. Built per the ADR-0021 amendment: `job-spend-pacer` also records each user's day, ISO week and month
+totals from `/effective` and copies the gateway's `public.spend` while it matches the U-156 contract, into
+`admin_console.spend_history` (larger value wins, never deleted); the Chargeback page and CSV report any closed period
+recorded there (T-184, T-185). `Update-AdminUi.ps1` now also moves the console's scheduled jobs to the new image (T-183,
+built by a parallel agent); before this, a console update left `job-spend-pacer` on an older image. Live on Contoso, two
+image-only updates: history filled with 18 rows from 2026-10-25, none lower than the gateway's; every other snapshot
+item was identical (data hashes, 3 app-role assignments, 30 Azure role assignments, gateway image and revision, app and
+job settings) (docs/TEST-PLAN.md, P-50 results). The public repository's `main` now refuses force pushes and deletion
+(ruleset `protect-main`). Full suite 881 tests. Council (self-review): Architect PASS (history in our schema, written by
+the existing job, so no Bicep redeploy or new grant; the gateway's table is read only and contract-gated), Coder PASS
+(13 guard mutants caught across T-183 to T-185), QA PASS-WITH-NOTES (the deployed page was not opened, as sign-in is
+interactive; the page was proven with the same code and the live rows), UX PASS-WITH-NOTES (Period read "Month to date"
+beside a closed month; fixed to Monthly/Weekly/Daily and tested), Security PASS (no new secret, role or network change;
+read-only SQL on `public.*`; temporary firewall rule removed). The P-50 box stays unchecked for the same reason as P-51:
+its dependency chain reaches P-35, still active.
+
+**P-51 gateway image-only upgrade (2026-11-21):** Built `scripts/admin/upgrade-gateway.mjs` (CLI) and
+`scripts/admin/gateway-upgrade.mjs` (pure logic) per ADR-0021. It takes a snapshot before the swap (our
+`admin_console` tables by a read-only SQL transaction, the gateway's table list, `_migrations` and `public.spend`
+contract, and caps, audit and monthly spend through the admin API, plus health, inference and bootstrap checks), swaps
+only the `gateway` image, waits for a Healthy revision, compares, records the image in the installer state, and on any
+failure swaps the previous image back. Managed PostgreSQL only. T-182: 11 unit tests pass; 12 mutants caught (the
+digest-length mutant first survived; two target cases were added). Live on Contoso with the isolated profile: a `--plan`
+run; a `--build` upgrade to `sha256:f5f55c6b…4b48` with every compared item unchanged; and a non-gateway image whose
+revision `--0000029` was `ActivationFailed`, rolled back to Healthy `--0000030` with the installer state unchanged.
+Each run removed its temporary firewall rule. U-159 is now ASSUMED with this script as its detector. The P-51 roadmap
+box stays unchecked: it depends on P-35, which is still active, and the ledger rule refuses a done packet whose
+dependency is not done. P-50 (spend history) is not built. Council (self-review): Architect PASS (image-only swap;
+gateway data compared through the documented API so internal schema changes give notes, not rollbacks), Coder PASS
+(pure logic separate from Azure calls, 12 of 12 mutants caught), QA PASS-WITH-NOTES (live rollback proven only for an
+activation failure; a data-difference rollback is covered by unit tests only), UX PASS-WITH-NOTES (`--profile` checks
+need Windows PowerShell; the output is plain log lines), Security PASS (read-only SQL, no secret printed, temporary
+firewall rule removed in a `finally`, target limited to a `claude-gateway` digest in the app's own registry).
+
+**P-35 Desktop connectors and Anthropic marketplaces live (2026-11-21):** The owner asked to test Microsoft 365 with
+a second Microsoft 365 test tenant and make the Anthropic marketplaces available on the test setup. A public client app was registered in
+a second Microsoft 365 test tenant (delegated `User.Read`, no secret). `Gateway.Premium` on Contoso now serves `Microsoft 365
+(second tenant)`, the three Anthropic marketplaces pinned to commits, and the plugin, marketplace, extension and skill switches
+(revision `ca-claude-gw--0000026`, Healthy; the copy taken before is in the session folder for a restore). Claude
+Desktop on the owner's machine connected all three connectors without an approval step (U-145 RESOLVED), signed in to
+the second tenant's Microsoft 365 through the Windows broker, and installed the marketplaces after a restart (U-152). Pending: an
+authenticated Microsoft 365 tool call from a chat (the second tenant's account has no mailbox, so only the profile tool applies),
+Salesforce (no org), and Claude Code CLI plugin policy (`enabledPlugins`, `extraKnownMarketplaces`), which the admin
+file does not render. T-175 PARTIAL.
+
+**Spend history and gateway upgrades (discovery, 2026-11-21):** The owner asked whether past spend can be added, and
+that a new Anthropic gateway image not break the console's data; designs target the managed PostgreSQL only. Read-only
+queries on the Contoso server (through a temporary firewall rule, removed after each use) found that the gateway's
+`public.spend` keeps per-principal daily, weekly and monthly rows, including past periods from 2026-10-25, with no model
+column (U-156); it is not a documented interface. The Contoso gateway had run Claude Code 2.1.280 on every revision
+since 2026-10-18 (U-158). A rehearsal swapped only the gateway image to 2.1.311 (`--0000026` to `--0000027`): the table
+list, migration versions 1 to 6 and content hashes of tags, past spend, caps, audit and identities were unchanged, and
+inference, bootstrap, `/effective`, caps and `/audit` answered 200 (U-157). The installer state now records the 2.1.311
+image, so a later `app` stage does not roll it back. ADR-0021 (Proposed) plans P-50 (daily `/effective` snapshot into
+`admin_console.spend_daily`, plus a contract-checked one-time backfill from `public.spend`) and P-51 (an image-only
+gateway upgrade script with the same snapshot comparison and a rollback). U-159 stays OPEN per release. Not built yet.
+
+**P-35 live Salesforce and Microsoft 365 proof (2026-11-20, vendor authentication blocked):** The owner authorized repairing the
+deployment, granting required permissions in Contoso, and rebuilding only if repair is insufficient. Work uses the
+isolated Contoso Azure profile and its state-matched deployment, not the workstation's default subscription.
+Both existing Contoso consoles already have Entra authentication enabled; the earlier sign-in-off result came from
+the separate public demo in another tenant. No deletion is currently needed. Acceptance: preserve the existing
+Foundry route and database; deliver the reviewed connector configuration from the live gateway; verify client-side
+egress endpoints; execute authenticated, read-only Microsoft 365 and Salesforce tools where vendor access permits.
+Bootstrap delivery, OAuth discovery, HTTP reachability and authenticated tool execution are separate results.
+Results: the existing Desktop-connected deployment `rg-claude-gw-contoso` was repaired in place. The console image
+update reached Healthy `ca-admin-ui--0000015`, preserving its settings. Actual Entra admin sign-in returned 200.
+Its managed identity already had the Graph application grants but lacked Container Apps Operator on the environment
+and Managed Identity Operator on the gateway identity. Those two exact-scope grants cleared the live configuration
+save's 403; the real authenticated browser save returned 200 without a data-loss acknowledgement.
+
+The gateway serves `Microsoft 365 (Contoso)` and `Microsoft Learn` from `/user/bootstrap` (200). The dedicated
+Microsoft 365 public client declares only delegated `User.Read Mail.Read`, has no secret, and registers both
+`http://localhost` and the documented Windows WAM redirect. User consent is not recorded as completed.
+An isolated protocol test of the installed Desktop's unmodified bundled M365 server initializes and lists 11 read tools, but `get_me` remained
+in interactive sign-in and did not return an authenticated result. The test user has no Microsoft 365 license.
+Salesforce's public endpoint and OAuth metadata are reachable from this Windows client, but the owner was unavailable
+to supply a Salesforce org and External Client App Consumer Key. No Salesforce authenticated tool result is claimed,
+and Desktop application of the newly served settings still requires the client-side T-175 check.
+
+The inference health check also found a pre-existing invalid external-tenant Foundry credential (`AADSTS7000215`).
+The owner of that already-configured backend application added a replacement pilot credential; its issuer and the
+same Foundry backend were tested before installation. ARM what-if permitted only the existing gateway modification
+(other resources were Ignore), and the shared config-store save preserved all unrelated secret values. Healthy
+`ca-claude-gw--0000019` now returns PONG through the unchanged Foundry model route (200). The database and existing
+cap remain; no infrastructure was deleted or recreated. The pilot backend credential expires **2026-11-27** and is not a
+claim of unattended production credential rotation. Evidence is in the private session files
+`live-connectors-final-proof.json`, `foundry-repair-proof.json`, `m365-authenticated-proof.json` and
+`connector-egress-probes.json`; T-177 to T-179 separate deployment, vendor authentication and egress proof.
+The live configuration used connector source `3802ba0` and image-only verifier fix `a713de8`.
+Council for this live test: Architect PASS (same backend, shared config store, no teardown), Coder PASS (public-client
+and bootstrap limits are explicit), QA BLOCK (T-175/T-178 need the user's Desktop sign-in and Salesforce org access),
+UX PASS-WITH-NOTES (admin sign-in works; vendor consent still needs user interaction), Security PASS-WITH-NOTES
+(delegated read scopes only, no credentials in evidence, seven-day backend pilot expiry recorded).
+The offline packet gate passed with an isolated logged-out Azure profile. P-35 remains active because the
+authenticated vendor and Desktop checks are incomplete; a passing repository gate is not vendor connection proof.
+
+**P-35 Salesforce connector through the gateway (2026-11-21):** The owner asked to fix and prove the Salesforce and
+Microsoft 365 connectors live. Salesforce's hosted MCP server publishes no dynamic client registration, so `oauth: true`
+cannot sign in. ADR-0020 amendment 2 accepts Desktop's documented "Bring your own client" object with a public client
+ID and scopes only; secrets and secret helpers stay refused (T-180, commit `8bed7b2`). The first live rollout also
+exposed an older defect: the gateway image (2.1.311) refuses `defaultState` at boot, which the console's **Starts: Off**
+wrote. It is now refused (U-151, T-181, commit `23da8cf`). Live on Contoso, through admin-ui's configuration store:
+the console image is `ca-admin-ui--0000017` (image-only update, settings verified unchanged); a Salesforce entry with
+a placeholder client ID booted Healthy and `/user/bootstrap` served it unchanged (U-150); the original configuration
+was restored and verified (`ca-claude-gw--0000025`, inference 200). Not proved, each needing the owner: a Salesforce
+sign-in (needs an org and an External Client App Consumer Key), the Microsoft 365 user sign-in and a read tool call
+(the test user has no Microsoft 365 licence, U-147), and Claude Desktop on this machine loading the bootstrap (T-175;
+needs an elevated `bootstrapUrl` write and the owner's device-code sign-in). Council (self-review): Architect PASS
+(amendment recorded; no new boundary); Coder PASS (narrow validator and form changes, test first); QA PASS (live
+apply/restore with exact comparisons, mutants caught, a live failure turned into T-181); UX PASS (form says "no
+secret", names the Consumer Key; the version reason is in the error); Security PASS (no secret accepted or stored; the
+test client ID was a placeholder; the original configuration restored).
+
+**P-35 Desktop connectors, plugins and Cowork egress (2026-11-19):** The owner asked for a demo and a how-to for
+plugins, connectors and Claude.ai import and export; the customer then required SaaS-like plugins and connectors and a
+`coworkEgressAllowedHosts` list of widely used domains. ADR-0020 and its amendment accept a reviewed subset of Desktop
+keys per role; U-144 RESEARCHED, U-145 ASSUMED (detector T-175, manual). T-171 to T-174 pass
+(`node --test tests/admin-config.test.mjs tests/admin-ui-web.test.mjs`, 95 tests); nine isolated mutations of the new
+guards were caught with baseline test counts and named failures. The local demo console accepted a draft with 15
+connectors, three marketplaces and 55 hosts, and its rendered gateway.yaml carried each key. Not yet live on a gateway.
+Council (code-review agent over `1879df6..4172516`): Coder PASS-WITH-NOTES, QA PASS-WITH-NOTES, UX PASS-WITH-NOTES,
+Security PASS; Architect PASS (ADR-0020 amendment, boundaries unchanged). Two findings fixed test-first: a built-in
+`server` named `constructor` threw inside validation and `["github"]` passed (now own string keys only, T-173); an
+explicit `[]` in the admin file showed as unset in the card (now labelled, T-174). Three mutants of the fixes caught.
+
+**P-35 image-only console preservation regression (2026-11-20):** Updating the public demo console reached Healthy
+revision `ca-admin-ui--0000006`, but the updater refused success because Azure's response added exact defaults
+(`imageType: ContainerImage`, `ephemeralStorage: 1Gi`, scale polling/cooldown values) and redacted `value` fields for
+unchanged secret-backed environment variables. T-176 was written first and failed on this Azure-shaped response;
+`Update-AdminUi.ps1` now normalizes only those exact defaults and ignores only the redacted `value` beside a retained
+`secretRef`. T-176's negative cases still refuse changed ingress and plain environment values. No gateway config or
+Desktop policy changed. After the fix, `Update-AdminUi.ps1` completed and revision `ca-admin-ui--0000007` is Healthy;
+the updater confirmed authentication, ingress, secrets, identity and environment unchanged, and did not update the
+gateway, database, app registrations, role grants or jobs. The public demo responds at `/`, but `/api/me` reports
+`signIn=off` and Container Apps has no auth config. Enabling it would create the admin sign-in app and grant four
+Microsoft Graph application roles to `id-admin-ui`, including `AppRoleAssignment.ReadWrite.All`; none is currently
+granted. That security-sensitive change was not made. Local council: Architect PASS (the accepted
+normalization is narrow and recorded here), Coder PASS (small helper change, test first), QA PASS (7 focused cases,
+including the original failure and real-setting negatives), UX PASS (failed verification still names rollback), Security
+PASS (secret references remain compared and secret values are not logged).
+
 **P-35 environment join for Apply (2026-11-05):** The customer's **Apply and roll out** answered 403
 `LinkedAuthorizationFailed`: `id-admin-ui` held Container Apps Contributor on `ca-claude-gw` but not
 `Microsoft.App/managedEnvironments/join/action` on `cae-claude-gw`, which Azure checks on every PUT of the app. The

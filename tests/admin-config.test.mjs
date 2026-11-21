@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { renderGatewayConfig, adminErrors } from '../scripts/admin/new-gateway-config.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -324,6 +325,160 @@ test('T-167 Desktop capability input is strict, including nested import options'
     const admin = desktopAdmin(settings);
     assert.ok(adminErrors(admin, admin.roles, 'test').length > 0, JSON.stringify(settings));
   }
+});
+
+// T-171 (ADR-0020): connectors, organization plugin marketplaces, plugin server limits and the import organization list
+// travel in the policy's desktop block. Only fields Desktop does not mark "Consent required", and no secret or command.
+const CONNECTOR = { name: 'Contoso Docs', transport: 'http', url: 'https://mcp.contoso.example/mcp', oauth: true,
+  toolTimeoutSec: 120, toolPolicy: { 'read_*': 'allow', delete_page: 'blocked' } };
+const MARKETPLACE = { source: 'github', repo: 'contoso/claude-plugins', ref: '0123456789abcdef0123456789abcdef01234567',
+  installationPreference: 'auto_install', expectedName: 'contoso-plugins' };
+const POLICY_SETTINGS = {
+  managedMcpServers: [CONNECTOR],
+  allowedPluginMarketplaces: [MARKETPLACE, { source: 'url', url: 'https://plugins.contoso.example/marketplace.json' }],
+  allowedPluginMcpServers: [{ serverUrl: 'https://*.contoso.example/*' }],
+  deniedPluginMcpServers: [{ serverUrl: 'https://untrusted.example/*' }],
+  isLocalDevMcpEnabled: false,
+  isDesktopExtensionSignatureRequired: true,
+  claudeAiImport: { enabled: true, exportEnabled: false, allowedOrganizationUuids: ['0f8fad5b-d9cb-469f-a165-70867728950e'] },
+};
+const valueOf = (yaml, key) => {
+  const line = yaml.split('\n').find((l) => l.trimStart().startsWith(`${key}: `));
+  assert.ok(line, key);
+  return JSON.parse(line.slice(line.indexOf(': ') + 2));
+};
+
+test('T-171 connectors, marketplaces, plugin server limits and import organizations render as JSON flow values', () => {
+  const admin = desktopAdmin(POLICY_SETTINGS);
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+  const yaml = renderGatewayConfig(admin, { topology: 'test' });
+  const premium = yaml.slice(yaml.indexOf('\nmanaged:\n')).split('Gateway.Standard')[0];
+  assert.deepEqual(valueOf(premium, 'managedMcpServers'), [CONNECTOR]);
+  assert.deepEqual(valueOf(premium, 'allowedPluginMarketplaces'), POLICY_SETTINGS.allowedPluginMarketplaces);
+  assert.deepEqual(valueOf(premium, 'allowedPluginMcpServers'), POLICY_SETTINGS.allowedPluginMcpServers);
+  assert.deepEqual(valueOf(premium, 'deniedPluginMcpServers'), POLICY_SETTINGS.deniedPluginMcpServers);
+  assert.match(premium, /        isLocalDevMcpEnabled: false\n/);
+  assert.match(premium, /        isDesktopExtensionSignatureRequired: true\n/);
+  assert.match(premium, /        claudeAiImport:\n          enabled: true\n          exportEnabled: false\n          allowedOrganizationUuids: \["0f8fad5b-d9cb-469f-a165-70867728950e"\]\n/);
+  // Field order is fixed whatever the admin file's order, so an unchanged meaning renders the same text.
+  const reordered = desktopAdmin({ ...POLICY_SETTINGS, managedMcpServers: [Object.fromEntries(Object.entries(CONNECTOR).reverse())] });
+  assert.equal(renderGatewayConfig(reordered, { topology: 'test' }), yaml);
+  assert.deepEqual(valueOf(renderGatewayConfig(desktopAdmin({ allowedPluginMcpServers: [] }), { topology: 'test' }), 'allowedPluginMcpServers'), [],
+    'an empty allow list is kept: it means no plugin server');
+  assert.doesNotMatch(renderGatewayConfig(desktopAdmin(POLICY_SETTINGS, false), { topology: 'test' }), /managedMcpServers|allowedPlugin/);
+});
+
+test('T-171 connector and marketplace fields that carry secrets, commands or unchecked values are refused', () => {
+  const bad = [
+    [{ managedMcpServers: [{ ...CONNECTOR, headers: { Authorization: 'Bearer x' } }] }, /managedMcpServers\[0\]\.headers: not supported/],
+    [{ managedMcpServers: [{ ...CONNECTOR, oauth: { clientSecret: 's' } }] }, /managedMcpServers\[0\]\.oauth\.clientSecret: not supported here/],
+    [{ managedMcpServers: [{ name: 'Local', transport: 'stdio', command: 'node' }] }, /managedMcpServers\[0\]\.transport: must be http or sse/],
+    [{ managedMcpServers: [{ ...CONNECTOR, url: 'http://mcp.contoso.example/mcp' }] }, /managedMcpServers\[0\]\.url: must be an https:\/\/ address/],
+    [{ managedMcpServers: [{ ...CONNECTOR, url: 'https://mcp.contoso.example/${SECRET}' }] }, /managedMcpServers\[0\]\.url: .*\$/],
+    [{ managedMcpServers: [CONNECTOR, { ...CONNECTOR }] }, /managedMcpServers: Contoso Docs is listed twice/],
+    [{ managedMcpServers: [{ ...CONNECTOR, name: '' }] }, /managedMcpServers\[0\]\.name: /],
+    [{ managedMcpServers: [{ ...CONNECTOR, toolPolicy: { read: 'always' } }] }, /toolPolicy\.read: must be allow, ask or blocked/],
+    [{ managedMcpServers: [{ ...CONNECTOR, toolTimeoutSec: 2 }] }, /toolTimeoutSec: must be a whole number from 5 to 3600/],
+    [{ managedMcpServers: {} }, /managedMcpServers: must be a list/],
+    [{ allowedPluginMarketplaces: [{ ...MARKETPLACE, credentialHelper: 'helper.exe' }] }, /allowedPluginMarketplaces\[0\]\.credentialHelper: not supported/],
+    [{ allowedPluginMarketplaces: [{ ...MARKETPLACE, ref: 'main' }] }, /allowedPluginMarketplaces\[0\]\.ref: auto_install and required need a 40-character commit SHA/],
+    [{ allowedPluginMarketplaces: [{ source: 'github', repo: 'not a repo' }] }, /allowedPluginMarketplaces\[0\]\.repo: must be owner\/name/],
+    [{ allowedPluginMarketplaces: [{ source: 'url', url: 'https://x.example/m.json', installationPreference: 'required' }] }, /needs manifestSha256/],
+    [{ allowedPluginMarketplaces: [{ source: 'ftp', url: 'ftp://x' }] }, /allowedPluginMarketplaces\[0\]\.source: must be github, git or url/],
+    [{ allowedPluginMcpServers: [{ serverName: 'x' }] }, /allowedPluginMcpServers\[0\]\.serverName: not supported/],
+    [{ deniedPluginMcpServers: [{ serverUrl: 'untrusted.example/*' }] }, /deniedPluginMcpServers\[0\]\.serverUrl: must start with https:\/\//],
+    [{ isLocalDevMcpEnabled: 'no' }, /isLocalDevMcpEnabled: must be true or false/],
+    [{ claudeAiImport: { allowedOrganizationUuids: ['not-a-uuid'] } }, /claudeAiImport\.allowedOrganizationUuids: not-a-uuid is not a UUID/],
+    [{ claudeAiImport: { automatic3pImport: true } }, /claudeAiImport\.automatic3pImport: not a supported import setting/],
+  ];
+  for (const [settings, message] of bad) {
+    const admin = desktopAdmin(settings);
+    assert.match(adminErrors(admin, admin.roles, 'test').join('\n'), message, JSON.stringify(settings));
+  }
+});
+
+// T-173 (ADR-0020 amendment, customer requirement): SaaS-like connectors and Cowork egress. Built-in Microsoft 365 and
+// GitHub connectors need only IDs; coworkEgressAllowedHosts takes host names, *.wildcards or *.
+test('T-173 Cowork egress hosts and built-in Microsoft 365 and GitHub connectors render and validate', () => {
+  const m365 = { name: 'Microsoft 365', server: 'microsoft365', tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', clientId: '0f8fad5b-d9cb-469f-a165-70867728950e', toolPolicy: { 'send_*': 'ask' } };
+  const github = { name: 'GitHub', server: 'github', clientId: 'Iv1.0123456789abcdef', readOnly: true };
+  const hosts = ['pypi.org', '*.pythonhosted.org', 'registry.npmjs.org', 'github.com', '*.githubusercontent.com', 'example.com:8443'];
+  const admin = desktopAdmin({ managedMcpServers: [CONNECTOR, m365, github], coworkEgressAllowedHosts: hosts });
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+  const yaml = renderGatewayConfig(admin, { topology: 'test' });
+  assert.deepEqual(valueOf(yaml, 'managedMcpServers'), [CONNECTOR, m365, github]);
+  assert.deepEqual(valueOf(yaml, 'coworkEgressAllowedHosts'), hosts);
+  assert.deepEqual(valueOf(renderGatewayConfig(desktopAdmin({ coworkEgressAllowedHosts: ['*'] }), { topology: 'test' }), 'coworkEgressAllowedHosts'), ['*']);
+  for (const [settings, message] of [
+    [{ coworkEgressAllowedHosts: ['https://pypi.org'] }, /coworkEgressAllowedHosts: "https:\/\/pypi.org" is not a host name/],
+    [{ coworkEgressAllowedHosts: ['pypi.org/simple'] }, /is not a host name/],
+    [{ coworkEgressAllowedHosts: 'pypi.org' }, /coworkEgressAllowedHosts: must be a list/],
+    [{ managedMcpServers: [{ ...m365, tenantId: 'contoso' }] }, /managedMcpServers\[0\]\.tenantId: must be a directory \(tenant\) ID/],
+    [{ managedMcpServers: [{ name: 'Search', server: 'websearch', provider: 'brave' }] }, /managedMcpServers\[0\]\.server: must be microsoft365 or github/],
+    [{ managedMcpServers: [{ name: 'X', server: 'constructor', clientId: 'abc' }] }, /managedMcpServers\[0\]\.server: must be microsoft365 or github/],
+    [{ managedMcpServers: [{ name: 'X', server: ['github'], clientId: 'abc' }] }, /managedMcpServers\[0\]\.server: must be microsoft365 or github/],
+    [{ managedMcpServers: [{ ...github, clientId: '' }] }, /managedMcpServers\[0\]\.clientId: /],
+    [{ managedMcpServers: [{ ...github, transport: 'http' }] }, /managedMcpServers\[0\]\.transport: not used with a built-in server/],
+  ]) {
+    const bad = desktopAdmin(settings);
+    assert.match(adminErrors(bad, bad.roles, 'test').join('\n'), message, JSON.stringify(settings));
+  }
+});
+
+// T-180 (ADR-0020 amendment 2): a server without dynamic client registration, such as Salesforce's hosted MCP, signs in
+// with "Bring your own client": a public client ID and scopes, no secret. Desktop marks only the secret helper "Consent
+// required"; a client secret would be served to every user of the role, so both stay refused.
+test('T-180 a public OAuth client (Bring your own client) renders; secrets, helpers and other modes are refused', () => {
+  const salesforce = { name: 'Salesforce (read only)', transport: 'http', url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads',
+    oauth: { scope: 'mcp_api refresh_token', clientId: '3MVG9A2kN3Bn17hs.Consumer_Key-01', mode: 'byo', appendOfflineAccess: false }, toolPolicy: { '*': 'ask' } };
+  const admin = desktopAdmin({ managedMcpServers: [salesforce, CONNECTOR] });
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
+  const line = renderGatewayConfig(admin, { topology: 'test' }).split('\n').find((l) => l.trimStart().startsWith('managedMcpServers: '));
+  assert.ok(line.includes('"oauth":{"mode":"byo","clientId":"3MVG9A2kN3Bn17hs.Consumer_Key-01","scope":"mcp_api refresh_token","appendOfflineAccess":false}'),
+    'oauth members render in a fixed order');
+  assert.deepEqual(valueOf(renderGatewayConfig(admin, { topology: 'test' }), 'managedMcpServers')[0].oauth,
+    { mode: 'byo', clientId: '3MVG9A2kN3Bn17hs.Consumer_Key-01', scope: 'mcp_api refresh_token', appendOfflineAccess: false });
+  const minimal = desktopAdmin({ managedMcpServers: [{ ...salesforce, oauth: { clientId: 'abc123' } }] });
+  assert.deepEqual(adminErrors(minimal, minimal.roles, 'test'), [], 'mode can be left out');
+  const oauth = (o) => [{ managedMcpServers: [{ ...salesforce, oauth: o }] }];
+  for (const [settings, message] of [
+    [oauth({ clientId: 'abc', clientSecret: 's' }), /managedMcpServers\[0\]\.oauth\.clientSecret: not supported here/],
+    [oauth({ clientId: 'abc', clientSecretHelper: 'helper.exe' }), /managedMcpServers\[0\]\.oauth\.clientSecretHelper: not supported here/],
+    [oauth({ mode: 'hosted', authorizationServer: ['https://login.salesforce.com'] }), /managedMcpServers\[0\]\.oauth\.mode: must be byo/],
+    [oauth({ scope: 'mcp_api' }), /managedMcpServers\[0\]\.oauth\.clientId: required/],
+    [oauth({ clientId: 'has space' }), /managedMcpServers\[0\]\.oauth\.clientId: must be/],
+    [oauth({ clientId: 'abc', scope: 'x ${SECRET}' }), /managedMcpServers\[0\]\.oauth\.scope: /],
+    [oauth({ clientId: 'abc', appendOfflineAccess: 'yes' }), /managedMcpServers\[0\]\.oauth\.appendOfflineAccess: must be true or false/],
+    [oauth(false), /managedMcpServers\[0\]\.oauth: must be true/],
+    [oauth(['abc']), /managedMcpServers\[0\]\.oauth: must be true/],
+  ]) {
+    const bad = desktopAdmin(settings[0]);
+    assert.match(adminErrors(bad, bad.roles, 'test').join('\n'), message, JSON.stringify(settings));
+  }
+});
+
+// T-181 (U-151): the deployed gateway image (Claude Code 2.1.311) refuses defaultState inside a managedMcpServers entry at
+// boot ("not a recognized sub-key", live 2026-11-20); new sub-keys need 2.1.321. It is refused before rendering.
+test('T-181 defaultState is refused on remote and built-in connectors, naming the gateway version that accepts it', () => {
+  for (const entry of [{ ...CONNECTOR, defaultState: 'off' }, { ...CONNECTOR, defaultState: 'on' },
+    { name: 'M365', server: 'microsoft365', tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47', clientId: '0f8fad5b-d9cb-469f-a165-70867728950e', defaultState: 'off' }]) {
+    const bad = desktopAdmin({ managedMcpServers: [entry] });
+    const errors = adminErrors(bad, bad.roles, 'test');
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0], /managedMcpServers\[0\]\.defaultState: .*2\.1\.321/);
+  }
+});
+test('T-173 every catalog connector, marketplace and egress preset passes the admin-file validation', () => {
+  const context = {};
+  context.globalThis = context;
+  vm.runInNewContext(fs.readFileSync(path.join(import.meta.dirname, '..', 'admin-ui', 'web', 'desktop-catalog.js'), 'utf8'), context);
+  const catalog = context.desktopCatalog;
+  assert.ok(catalog.connectors.length >= 8 && catalog.marketplaces.length >= 2 && catalog.egressHosts.length >= 20);
+  for (const c of catalog.connectors) assert.ok(c.source?.startsWith('https://'), `${c.entry.name} cites its vendor page`);
+  const settings = { managedMcpServers: catalog.connectors.map((c) => c.entry), allowedPluginMarketplaces: catalog.marketplaces.map((m) => m.entry),
+    coworkEgressAllowedHosts: catalog.egressHosts };
+  const admin = desktopAdmin(JSON.parse(JSON.stringify(settings)));
+  assert.deepEqual(adminErrors(admin, admin.roles, 'test'), []);
 });
 
 // T-135 (ADR-0014): spendPacing turns on the soft limit. The job writes with its own key, so the admin block lists it,

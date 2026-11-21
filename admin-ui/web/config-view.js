@@ -20,8 +20,15 @@
     ['chatTabEnabled', 'Allow Chat'], ['coworkTabEnabled', 'Allow Cowork'], ['isClaudeCodeForDesktopEnabled', 'Allow Code'],
     ['userPluginUploadsEnabled', 'Allow plugin uploads'], ['userPluginMarketplacesEnabled', 'Allow user-added plugin marketplaces'],
     ['skillCreationEnabled', 'Allow user-created skills'], ['isDesktopExtensionEnabled', 'Allow desktop extensions'],
+    ['isDesktopExtensionSignatureRequired', 'Require signed desktop extensions'], ['isLocalDevMcpEnabled', 'Allow local MCP servers'],
     ['claudeAiImport.enabled', 'Allow Claude.ai import'], ['claudeAiImport.exportEnabled', 'Allow session export'],
   ];
+  // ADR-0020: list-valued Desktop settings the card edits; scripts/admin/desktop-settings.mjs validates their entries.
+  const desktopLists = ['managedMcpServers', 'allowedPluginMarketplaces', 'allowedPluginMcpServers', 'deniedPluginMcpServers', 'claudeAiImport.allowedOrganizationUuids', 'coworkEgressAllowedHosts'];
+  const httpsUrl = (v) => /^https:\/\/[^\s/]+/i.test(v) && !/[\s$]/.test(v);
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  // Same shape the server checks (scripts/admin/desktop-settings.mjs HOST): host, *.host or *, optional :port.
+  const egressHost = /^(\*|(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:\d{1,5})?)$/i;
 
   // The first matrix edit on a file without policies writes what the gateway does today: every role, every model.
   function withPolicies(admin) {
@@ -110,6 +117,101 @@
       if (!Object.keys(settings).length) delete policy.desktopSettings;
       return next;
     },
+
+    // ADR-0020: a role's list-valued Desktop setting; an empty list removes the key, so Desktop's default applies.
+    desktopListOf(admin, role, key) {
+      const [parent, child] = key.split('.');
+      const settings = policyOf(admin, role)?.desktopSettings;
+      const value = child ? settings?.[parent]?.[child] : settings?.[parent];
+      return Array.isArray(value) ? clone(value) : [];
+    },
+
+    desktopListIsSet(admin, role, key) {
+      const [parent, child] = key.split('.');
+      const settings = policyOf(admin, role)?.desktopSettings;
+      return Array.isArray(child ? settings?.[parent]?.[child] : settings?.[parent]);
+    },
+
+    setDesktopList(admin, role, key, items) {
+      if (!desktopLists.includes(key)) throw new Error('Not a supported Desktop list setting');
+      if (!Array.isArray(items)) throw new Error('A Desktop list setting must be a list');
+      const next = withPolicies(admin);
+      const policy = policyOf(next, role);
+      if (!policy) throw new Error('The Desktop role is not admitted');
+      const settings = policy.desktopSettings ??= {};
+      const [parent, child] = key.split('.');
+      const target = child ? (settings[parent] ??= {}) : settings;
+      if (!items.length) delete target[child ?? parent];
+      else target[child ?? parent] = clone(items);
+      if (child && !Object.keys(target).length) delete settings[parent];
+      if (!Object.keys(settings).length) delete policy.desktopSettings;
+      return next;
+    },
+
+    // A remote connector from the card's add form; on and no OAuth are Desktop's defaults, so they stay unset. oauth 'byo'
+    // is a public client ID (T-180, ADR-0020 amendment 2): a secret would reach every user of the role, so none is taken.
+    // defaultState is not written: the deployed gateway refuses it at boot (T-181, U-151).
+    connectorEntry({ name, url, transport, oauth, clientId, scope }) {
+      const trimmed = String(name ?? '').trim();
+      if (!trimmed || trimmed.length > 64 || /[\x00-\x1f\x7f$]/.test(trimmed)) throw new Error('Enter a name of 1 to 64 characters without $.');
+      const address = String(url ?? '').trim();
+      if (!httpsUrl(address)) throw new Error('Enter an https:// address.');
+      if (!['http', 'sse'].includes(transport)) throw new Error('Choose Streamable HTTP or SSE.');
+      let signIn = oauth === true ? { oauth: true } : {};
+      if (oauth === 'byo') {
+        const id = String(clientId ?? '').trim();
+        if (!/^[A-Za-z0-9._:-]{1,256}$/.test(id)) throw new Error('Enter the OAuth client ID (for Salesforce, the Consumer Key): letters, digits, . _ : -');
+        const scopes = String(scope ?? '').trim();
+        if (scopes.length > 1000 || /[\x00-\x1f\x7f$]/.test(scopes)) throw new Error('Scopes: up to 1000 characters without $.');
+        signIn = { oauth: { mode: 'byo', clientId: id, ...(scopes ? { scope: scopes } : {}) } };
+      }
+      return { name: trimmed, transport, url: address, ...signIn };
+    },
+
+    // Built-in connectors run inside Desktop; Microsoft 365 needs the customer's Entra app registration.
+    builtinConnectorEntry({ server, tenantId, clientId }) {
+      const app = String(clientId ?? '').trim();
+      if (server === 'microsoft365') {
+        const tenant = String(tenantId ?? '').trim();
+        if (!uuid.test(tenant)) throw new Error('Enter the directory (tenant) ID as a GUID.');
+        if (!uuid.test(app)) throw new Error('Enter the application (client) ID of your app registration as a GUID.');
+        return { name: 'Microsoft 365', server, tenantId: tenant, clientId: app };
+      }
+      if (server === 'github') {
+        if (!/^[A-Za-z0-9._-]{1,100}$/.test(app)) throw new Error('Enter the GitHub OAuth or GitHub App client ID.');
+        return { name: 'GitHub', server, clientId: app };
+      }
+      throw new Error('Choose Microsoft 365 or GitHub.');
+    },
+
+    // Cowork egress hosts, one per line or comma-separated; duplicates collapse.
+    hostsFrom(text) {
+      const hosts = [...new Set(String(text ?? '').split(/[\s,]+/).map((h) => h.trim()).filter(Boolean))];
+      const bad = hosts.find((h) => !egressHost.test(h));
+      if (bad) throw new Error(`${bad} is not a host name. Write github.com or *.github.com, without https:// or a path.`);
+      return hosts;
+    },
+
+    marketplaceEntry({ kind, value, ref }) {
+      const text = String(value ?? '').trim();
+      const pin = String(ref ?? '').trim();
+      let entry;
+      if (kind === 'github') {
+        if (!/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(text)) throw new Error('Enter the GitHub repository as owner/name.');
+        entry = { source: 'github', repo: text };
+      } else if (kind === 'git' || kind === 'url') {
+        if (!httpsUrl(text)) throw new Error('Enter an https:// address.');
+        entry = { source: kind, url: text };
+      } else throw new Error('Choose GitHub, Git URL or marketplace.json URL.');
+      if (pin) entry.ref = pin;
+      return entry;
+    },
+
+    // Plugin server allow and block lists as one https:// pattern per line.
+    patternsFrom(text) {
+      return String(text ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((serverUrl) => ({ serverUrl }));
+    },
+    patternsText(items) { return list(items).map((i) => i?.serverUrl ?? '').join('\n'); },
 
     // ADR-0014: the soft limit, spendPacing.softLimitPercent in the admin file; null is off, with the key removed.
     softLimitOf(admin) { return Number.isInteger(admin?.spendPacing?.softLimitPercent) ? admin.spendPacing.softLimitPercent : null; },

@@ -10,6 +10,8 @@ import { createArmClient } from './arm-client.mjs';
 import { ARM_API_VERSION } from './gateway-config.mjs';
 import { deleteSpendLimit, listAudit, listEffectiveSpend, listSpendLimits, setSpendLimit } from './gateway-client.mjs';
 import { PACER_SECRET, pacePlan } from '../../scripts/admin/spend-pacing.mjs';
+import { runHistory } from './spend-history.mjs';
+import { gatewayDatabase } from './user-tags.mjs';
 
 const MAX_PAGES = 100;
 
@@ -95,6 +97,25 @@ export async function runPacer({ arm, resourceId, gatewayUrl, fetch: fetchImpl =
   return { exitCode: summary.errors ? 1 : 0, summary };
 }
 
+/**
+ * One job run: the pacer, then chargeback history (P-50, ADR-0021). Each runs whatever the other's result, so a history
+ * failure never stops pacing and a pacing failure never stops history. The exit code is 1 if either failed.
+ */
+export async function runJob({ pacer, history }) {
+  const p = await pacer().catch((e) => { console.log(JSON.stringify({ evt: 'spend_pacer.error', action: 'run', message: e.message })); return { exitCode: 1 }; });
+  const h = await history().catch((e) => { console.log(JSON.stringify({ evt: 'spend_history.error', message: e.message })); return { exitCode: 1 }; });
+  return { exitCode: p.exitCode || h.exitCode ? 1 : 0, pacer: p.exitCode, history: h.exitCode };
+}
+
+/** /effective rows for every principal and all three periods, read with the gateway's admin key from its own secrets. */
+export async function effectiveForHistory({ arm, resourceId, gatewayUrl, fetch: fetchImpl = fetch }) {
+  const listed = (await arm('POST', `${resourceId}/listSecrets?api-version=${ARM_API_VERSION}`)).json?.value ?? [];
+  const secrets = Object.fromEntries(listed.map((s) => [s.name, s.value]));
+  const key = secrets['admin-write-key'] ?? secrets[PACER_SECRET];
+  if (!key) return [];
+  const reader = { baseUrl: gatewayUrl, writeKey: key, fetch: fetchImpl };
+  return allPages((page) => listEffectiveSpend(reader, { period: ['daily', 'weekly', 'monthly'], limit: 1000, page }), (r) => r?.next_page ?? null);
+}
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const env = process.env;
   const missing = ['AZURE_CLIENT_ID', 'GATEWAY_RESOURCE_ID', 'GATEWAY_URL'].filter((n) => !env[n]);
@@ -104,7 +125,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   } else {
     const arm = createArmClient({ clientId: env.AZURE_CLIENT_ID, cache: new Map() });
     const deployAdmin = env.GATEWAY_ADMIN_FILE_JSON ? JSON.parse(env.GATEWAY_ADMIN_FILE_JSON) : undefined;
-    runPacer({ arm, resourceId: env.GATEWAY_RESOURCE_ID, gatewayUrl: env.GATEWAY_URL, deployAdmin })
-      .then((r) => { process.exitCode = r.exitCode; });
+    const ctx = { arm, resourceId: env.GATEWAY_RESOURCE_ID, gatewayUrl: env.GATEWAY_URL };
+    runJob({
+      pacer: () => runPacer({ ...ctx, deployAdmin }),
+      history: () => runHistory({ credential: () => gatewayDatabase(ctx), effective: () => effectiveForHistory(ctx) }),
+    }).then((r) => { process.exitCode = r.exitCode; });
   }
 }

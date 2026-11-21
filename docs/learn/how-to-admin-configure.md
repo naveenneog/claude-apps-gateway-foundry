@@ -36,7 +36,7 @@ $rg = 'rg-claude-gw-eval'   # the deployment's resource group, as in the first-i
 ## Change models and per-role model access
 
 The gateway configuration `config/gateway.azure-test.yaml` is rendered from the admin file
-`config/gateway-admin.azure-test.json`, and a test fails when the two differ (tests/admin-config.test.mjs:42). The
+`config/gateway-admin.azure-test.json`, and a test fails when the two differ (tests/admin-config.test.mjs:43). The
 rendering of the fixed sections, the ADR-0003 topology, is part of the script.
 
 | Key | Meaning |
@@ -44,7 +44,7 @@ rendering of the fixed sections, the ADR-0003 topology, is part of the script.
 | `roles` | The app roles the gateway admits, from `infra/azure-test/entra-app.json`; they become `oidc.allowed_groups` |
 | `models` | Each model's `id` for clients, optional `label`, and the Foundry `deployment` that serves it |
 | `policies` | Optional: one entry per admitted role, `{ "role": ..., "models": [...] }`, in the order the gateway checks them |
-| `policies[].desktop` | Optional boolean. Claude Desktop's own sign-in endpoint, `/user/bootstrap`, answers 404 unless the matching policy carries a `desktop` key ([Claude Desktop overlay](https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay)); a role without `desktop: true` gets the terminal and VS Code/JetBrains extensions (the `cli` key covers all three) but not Desktop. Absent, a policy falls back to `deployment.desktop`'s own default (scripts/admin/desktop-settings.mjs:26) |
+| `policies[].desktop` | Optional boolean. Claude Desktop's own sign-in endpoint, `/user/bootstrap`, answers 404 unless the matching policy carries a `desktop` key ([Claude Desktop overlay](https://code.claude.com/docs/en/claude-apps-gateway-config#claude-desktop-overlay)); a role without `desktop: true` gets the terminal and VS Code/JetBrains extensions (the `cli` key covers all three) but not Desktop. Absent, a policy falls back to `deployment.desktop`'s own default (scripts/admin/desktop-settings.mjs:215) |
 
 1. Edit the admin file. This example gives `Gateway.Premium` both models and `Gateway.Standard` one:
 
@@ -147,8 +147,9 @@ The same options can be written in that role's `desktopSettings`, for example:
 Export also needs import enabled. Imported conversations and exported zip files can contain sensitive customer
 data. Plugin uploads and extensions can execute programs on the developer's machine; these switches neither
 install a plugin nor approve its tool calls. Automatic third-party session migration is independent, can reactivate
-scheduled tasks and plugins, and is not enabled by these controls. Marketplace allowlists and detailed organization
-plugin policies remain separate Desktop managed settings
+scheduled tasks and plugins, and is not enabled by these controls. Connectors, organization plugin marketplaces,
+plugin server limits, import organizations and Cowork's network hosts are set in the same card; see
+[Give Claude Desktop connectors, plugins, Claude.ai import and Cowork network access](how-to-desktop-plugins-connectors.md)
 ([Desktop configuration reference](https://claude.com/docs/third-party/claude-desktop/configuration#claudeaiimport)).
 These Desktop controls do not configure plugins in the standalone Claude Code terminal.
 

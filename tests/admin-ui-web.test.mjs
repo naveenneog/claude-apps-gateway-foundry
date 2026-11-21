@@ -102,6 +102,76 @@ test('T-167 Desktop capability draft edits preserve other roles, false values an
   assert.throws(() => cv.setDesktopSetting(contoso, 'Gateway.Premium', 'bootstrapUrl', true), /supported/);
 });
 
+// T-172 (ADR-0020): the Desktop capabilities card edits a role's connectors, marketplaces, plugin server limits and
+// import organizations as lists. An emptied list returns the key to Desktop's default; other roles are untouched.
+test('T-172 Desktop list edits build connector, marketplace and pattern entries and preserve other roles', () => {
+  const cv = load('config-view.js', 'configView');
+  const connector = cv.connectorEntry({ name: ' Contoso Docs ', url: 'https://mcp.contoso.example/mcp', transport: 'http', oauth: true, defaultState: 'off' });
+  // T-181: defaultState is not written; the deployed gateway refuses it at boot (U-151).
+  assert.deepEqual(plain(connector), { name: 'Contoso Docs', transport: 'http', url: 'https://mcp.contoso.example/mcp', oauth: true });
+  assert.deepEqual(plain(cv.connectorEntry({ name: 'X', url: 'https://x.example', transport: 'sse', oauth: false, defaultState: 'on' })),
+    { name: 'X', transport: 'sse', url: 'https://x.example' }, 'defaults are left unset');
+  assert.throws(() => cv.connectorEntry({ name: '', url: 'https://x.example', transport: 'http' }), /name/);
+  assert.throws(() => cv.connectorEntry({ name: 'X', url: 'http://x.example', transport: 'http' }), /https/);
+  // T-180: a public OAuth client for servers without automatic registration (Salesforce); never a secret.
+  assert.deepEqual(plain(cv.connectorEntry({ name: 'Salesforce', url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads', transport: 'http',
+    oauth: 'byo', clientId: ' 3MVG9.Key_1 ', scope: ' mcp_api refresh_token ', defaultState: 'on' })),
+  { name: 'Salesforce', transport: 'http', url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads', oauth: { mode: 'byo', clientId: '3MVG9.Key_1', scope: 'mcp_api refresh_token' } });
+  assert.deepEqual(plain(cv.connectorEntry({ name: 'S', url: 'https://s.example', transport: 'http', oauth: 'byo', clientId: 'abc', scope: '' })).oauth, { mode: 'byo', clientId: 'abc' });
+  assert.throws(() => cv.connectorEntry({ name: 'S', url: 'https://s.example', transport: 'http', oauth: 'byo', clientId: '' }), /client ID/);
+  assert.throws(() => cv.connectorEntry({ name: 'S', url: 'https://s.example', transport: 'http', oauth: 'byo', clientId: 'a b' }), /client ID/);
+  assert.throws(() => cv.connectorEntry({ name: 'S', url: 'https://s.example', transport: 'http', oauth: 'byo', clientId: 'abc', scope: 'x $Y' }), /scope/i);
+  assert.deepEqual(plain(cv.marketplaceEntry({ kind: 'github', value: 'contoso/plugins', ref: '' })), { source: 'github', repo: 'contoso/plugins' });
+  assert.deepEqual(plain(cv.marketplaceEntry({ kind: 'url', value: 'https://p.example/marketplace.json' })), { source: 'url', url: 'https://p.example/marketplace.json' });
+  assert.throws(() => cv.marketplaceEntry({ kind: 'github', value: 'not a repo' }), /owner\/name/);
+  assert.deepEqual(plain(cv.patternsFrom(' https://*.contoso.example/*\n\nhttps://a.example/* ')),
+    [{ serverUrl: 'https://*.contoso.example/*' }, { serverUrl: 'https://a.example/*' }]);
+  assert.equal(cv.patternsText([{ serverUrl: 'https://a.example/*' }, { serverUrl: 'https://b.example/*' }]), 'https://a.example/*\nhttps://b.example/*');
+
+  let draft = cv.setDesktopList(contoso, 'Gateway.Premium', 'managedMcpServers', [connector]);
+  draft = cv.setDesktopList(draft, 'Gateway.Premium', 'claudeAiImport.allowedOrganizationUuids', ['0f8fad5b-d9cb-469f-a165-70867728950e']);
+  assert.deepEqual(plain(cv.desktopListOf(draft, 'Gateway.Premium', 'managedMcpServers')), [plain(connector)]);
+  assert.deepEqual(plain(draft.policies[0].desktopSettings.claudeAiImport), { allowedOrganizationUuids: ['0f8fad5b-d9cb-469f-a165-70867728950e'] });
+  assert.equal(draft.policies[1].desktopSettings, undefined);
+  assert.equal(JSON.stringify(contoso), frozen);
+  draft = cv.setDesktopList(draft, 'Gateway.Premium', 'managedMcpServers', []);
+  draft = cv.setDesktopList(draft, 'Gateway.Premium', 'claudeAiImport.allowedOrganizationUuids', []);
+  assert.deepEqual(plain(draft), contoso, 'emptied lists return to Desktop defaults');
+  assert.throws(() => cv.setDesktopList(contoso, 'Gateway.Premium', 'bootstrapUrl', []), /supported/);
+  assert.ok(cv.desktopFields.some(([key]) => key === 'isLocalDevMcpEnabled'));
+  assert.ok(cv.desktopFields.some(([key]) => key === 'isDesktopExtensionSignatureRequired'));
+});
+
+// T-174 (ADR-0020 amendment): built-in Microsoft 365 / GitHub connectors and the Cowork egress host list.
+test('T-174 built-in connector entries and Cowork egress hosts edit as lists', () => {
+  const cv = load('config-view.js', 'configView');
+  const tenant = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const app = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+  assert.deepEqual(plain(cv.builtinConnectorEntry({ server: 'microsoft365', tenantId: ` ${tenant} `, clientId: app })),
+    { name: 'Microsoft 365', server: 'microsoft365', tenantId: tenant, clientId: app });
+  assert.deepEqual(plain(cv.builtinConnectorEntry({ server: 'github', tenantId: 'ignored', clientId: 'Iv1.abc123' })),
+    { name: 'GitHub', server: 'github', clientId: 'Iv1.abc123' });
+  assert.throws(() => cv.builtinConnectorEntry({ server: 'microsoft365', tenantId: 'contoso', clientId: app }), /tenant/);
+  assert.throws(() => cv.builtinConnectorEntry({ server: 'microsoft365', tenantId: tenant, clientId: '' }), /client/);
+  assert.throws(() => cv.builtinConnectorEntry({ server: 'github', clientId: 'a b' }), /client/);
+  assert.throws(() => cv.builtinConnectorEntry({ server: 'slack', clientId: 'x' }), /Microsoft 365 or GitHub/);
+
+  assert.deepEqual(plain(cv.hostsFrom(' github.com\n\n*.github.com, pypi.org ')), ['github.com', '*.github.com', 'pypi.org']);
+  assert.deepEqual(plain(cv.hostsFrom('a.example\na.example')), ['a.example'], 'duplicates collapse');
+  assert.throws(() => cv.hostsFrom('https://github.com/'), /github\.com/);
+  let draft = cv.setDesktopList(contoso, 'Gateway.Premium', 'coworkEgressAllowedHosts', ['*']);
+  assert.deepEqual(plain(cv.desktopListOf(draft, 'Gateway.Premium', 'coworkEgressAllowedHosts')), ['*']);
+  draft = cv.setDesktopList(draft, 'Gateway.Premium', 'coworkEgressAllowedHosts', []);
+  assert.deepEqual(plain(draft), contoso);
+  // An explicit [] in the admin file means "none"; the card must not show it as unset.
+  assert.equal(cv.desktopListIsSet(contoso, 'Gateway.Premium', 'coworkEgressAllowedHosts'), false);
+  const none = JSON.parse(JSON.stringify(contoso));
+  none.policies[0].desktopSettings = { allowedPluginMcpServers: [], claudeAiImport: { allowedOrganizationUuids: [] } };
+  assert.equal(cv.desktopListIsSet(none, 'Gateway.Premium', 'allowedPluginMcpServers'), true);
+  assert.equal(cv.desktopListIsSet(none, 'Gateway.Premium', 'claudeAiImport.allowedOrganizationUuids'), true);
+  assert.equal(cv.desktopListIsSet(none, 'Gateway.Premium', 'deniedPluginMcpServers'), false);
+});
+
 test('T-105 the role × model matrix reads policies, and with no policies every admitted role has every model', () => {
   const cv = load('config-view.js', 'configView');
   assert.deepEqual(plain(cv.allowedModels(contoso, 'Gateway.Standard')), ['claude-sonnet-5']);
@@ -589,7 +659,7 @@ test('T-105 index.html routes every page, loads each helper before app.js, and l
     assert.match(html, new RegExp(`<nav>[\\s\\S]*data-route="${route}"[\\s\\S]*</nav>`), `no nav link for ${route}`);
   }
   const app = html.indexOf('<script src="app.js">');
-  for (const helper of ['config-view.js', 'chargeback-view.js', 'roles-view.js', 'settings-view.js']) {
+  for (const helper of ['config-view.js', 'desktop-catalog.js', 'chargeback-view.js', 'roles-view.js', 'settings-view.js']) {
     const at = html.indexOf(`<script src="${helper}">`);
     assert.ok(at >= 0 && at < app, `${helper} must load before app.js`);
   }

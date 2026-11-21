@@ -1,15 +1,18 @@
-// The Chargeback page: spend per business unit for the current period to date (GET /api/chargeback), grouped by a
+// The Chargeback page: spend per business unit for the current period to date or a closed period from the console's
+// history (GET /api/chargeback, GET /api/chargeback/periods; ADR-0021), grouped by a
 // business-unit tag or by gateway role, the per-user rows behind it, CSV export, and the Business units card, which sets
 // each user's five tags in the gateway database (PUT /api/user-tags/{objectId}, POST /api/user-tags/import; ADR-0015).
 // Nothing here writes to Entra ID. Every amount is the API's own.
 const chargebackPage = (() => {
-  const state = { period: 'monthly', groupBy: 'department', group: null, editing: null };
+  const state = { period: 'monthly', key: '', groupBy: 'department', group: null, editing: null };
   const cb = () => chargebackView;
   const UNRESOLVED_TEXT = 'Unresolved users have no e-mail address recorded by the gateway yet, or were not found in Entra ID. Their spend is in the total.';
 
   async function render(ctx) {
     const option = (o, current) => el('option', { value: o.value, text: o.label, selected: o.value === current });
     const period = el('select', { name: 'period' }, cb().PERIODS.map((o) => option(o, state.period)));
+    const pastPeriod = el('select', { name: 'key' }, cb().periodChoices(state.period, []).map((o) => option(o, state.key)));
+    const historyNote = el('span', { class: 'toolbar-meta' });
     const groupBy = el('select', { name: 'groupBy' }, cb().GROUP_BY.map((o) => option(o, state.groupBy)));
     const exportCsv = ui.button('Export CSV', { kind: 'secondary', iconName: 'download' });
     const body = el('div', { class: 'stack' });
@@ -67,7 +70,7 @@ const chargebackPage = (() => {
       state.editing = null;
       if (units && !(units instanceof Error)) drawUnits();
       body.replaceChildren(ui.skeleton('cards', 4), ui.skeleton('table', 5), ui.loading('Loading chargeback'));
-      const result = await ui.settle(api.get(cb().dataHref(state.period, state.groupBy)));
+      const result = await ui.settle(api.get(cb().dataHref(state.period, state.groupBy, state.key)));
       if (!ctx.active() || mine !== token) return;
       if (result instanceof Error) {
         report = null;
@@ -85,7 +88,7 @@ const chargebackPage = (() => {
     function draw() {
       const groupMeta = cb().GROUP_BY.find((g) => g.value === report.groupBy) ?? cb().GROUP_BY[0];
       const sum = cb().summary(report);
-      const periodLabel = cb().PERIODS.find((p) => p.value === report.period)?.label ?? report.period;
+      const periodLabel = cb().periodChoices(report.period, report.key ? [report.key] : []).find((p) => p.value === (report.key ?? ''))?.label ?? report.period;
       const metric = (label, value, sub, kind = '') => el('div', { class: `card metric-card ${kind}`.trim() }, [
         el('div', { class: 'metric-label', text: label }), el('div', { class: 'metric-value', text: value }), el('div', { class: 'metric-sub', text: sub }),
       ]);
@@ -230,15 +233,27 @@ const chargebackPage = (() => {
       }
     }
 
-    period.addEventListener('change', () => { state.period = period.value; load(); });
+    // Closed periods with history (ADR-0021); on the in-app sidecar database there is none, and the reason is shown.
+    async function loadPeriods() {
+      const mine = token;
+      const result = await ui.settle(api.get(`/api/chargeback/periods?period=${encodeURIComponent(state.period)}`));
+      if (!ctx.active() || mine !== token) return;
+      const keys = result instanceof Error ? [] : result.keys ?? [];
+      pastPeriod.replaceChildren(...cb().periodChoices(state.period, keys).map((o) => option(o, state.key)));
+      historyNote.textContent = result instanceof Error ? `Past periods: ${result.message}`
+        : result.available === false ? `Past periods: ${result.reason}` : keys.length ? '' : 'No closed periods recorded yet.';
+    }
+
+    period.addEventListener('change', () => { state.period = period.value; state.key = ''; load(); loadPeriods(); });
+    pastPeriod.addEventListener('change', () => { state.key = pastPeriod.value; load(); });
     groupBy.addEventListener('change', () => { state.groupBy = groupBy.value; state.group = null; load(); });
     exportCsv.addEventListener('click', async () => {
       ui.busy(exportCsv, true, 'Exporting…');
       try {
-        const res = await fetch(cb().csvHref(state.period, state.groupBy), { headers: { Accept: 'text/csv' } });
+        const res = await fetch(cb().csvHref(state.period, state.groupBy, state.key), { headers: { Accept: 'text/csv' } });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `HTTP ${res.status}`);
         const named = /filename="?([^";]+)"?/.exec(res.headers.get('Content-Disposition') ?? '')?.[1];
-        ui.download(named || cb().csvFileName(state.period, state.groupBy, report?.generatedAt), await res.text(), 'text/csv');
+        ui.download(named || cb().csvFileName(state.period, state.groupBy, report?.generatedAt, state.key), await res.text(), 'text/csv');
       } catch (err) {
         ui.toast(`Could not export the CSV: ${err.message}`, 'error');
       } finally {
@@ -248,15 +263,15 @@ const chargebackPage = (() => {
 
     ctx.root.replaceChildren(
       ui.pageHeader({ title: 'Chargeback', description: 'Spend per business unit, from the gateway’s per-user totals and the business-unit tags set on this page.', actions: [exportCsv] }),
-      el('div', { class: 'toolbar' }, [ui.field({ label: 'Period', control: period }), ui.field({ label: 'Group by', control: groupBy }), stamp]),
-      ui.banner('info', ['Amounts are the gateway’s list-price estimates for the current period to date, not the Azure invoice. Past periods are not available from the gateway.']),
+      el('div', { class: 'toolbar' }, [ui.field({ label: 'Period', control: period }), ui.field({ label: 'Showing', control: pastPeriod }), ui.field({ label: 'Group by', control: groupBy }), stamp, historyNote]),
+      ui.banner('info', ['Amounts are the gateway’s list-price estimates, not the Azure invoice. The current period comes from the gateway; past periods come from the console’s history in the managed database, kept from when it was first recorded.']),
       body,
       ui.card({
         title: 'Business units',
         description: 'A business unit is the user’s department tag; Group by uses the five tags. Everyone with a gateway role is listed, spend or not. Edit a user and type a new name to create a unit, or pick an existing one. Tags are kept in the gateway database; Entra ID is not changed.',
         content: unitsBody,
       }));
-    await Promise.all([load(), loadUnits()]);
+    await Promise.all([load(), loadUnits(), loadPeriods()]);
   }
 
   return { title: 'Chargeback', render };

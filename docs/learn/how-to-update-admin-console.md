@@ -1,8 +1,8 @@
 ---
 title: Update an existing admin console without reinstalling the gateway
-description: Build and roll out only the admin console image while preserving sign-in, permissions, ingress, secrets and the gateway database.
+description: Build and roll out only the admin console image, or only the gateway image, while preserving sign-in, permissions, ingress, secrets and the gateway database.
 author: naveenneog
-ms.date: 11/04/2026
+ms.date: 11/21/2026
 ms.topic: how-to
 ---
 
@@ -41,8 +41,8 @@ keeps its existing settings; no app-registration name, admin file or `-UseExisti
 pwsh -File .\admin-ui\infra\Update-AdminUi.ps1 -ResourceGroup $rg -Plan
 ```
 
-The plan reads the selected subscription and console and prints the target, previous image and rollback command.
-It builds nothing and changes no Azure resource. After the target is checked, the update is:
+The plan reads the selected subscription, console and scheduled jobs and prints the target, previous images, rollback
+commands and the jobs it would update. It builds nothing and changes no Azure resource. After the target is checked, the update is:
 
 ```powershell
 pwsh -File .\admin-ui\infra\Update-AdminUi.ps1 -ResourceGroup $rg
@@ -51,9 +51,18 @@ pwsh -File .\admin-ui\infra\Update-AdminUi.ps1 -ResourceGroup $rg
 The script builds the repository's admin-ui image with ACR Tasks, deploys it by digest, waits for a new ready and
 Healthy revision, and compares authentication, ingress, identity, secrets and environment with the pre-update
 settings. A changed setting, failed build or unhealthy rollout produces an error, not a success message.
-The gateway, database, app registrations, role grants and scheduled jobs are not updated. This targeted image
+The gateway, database, app registrations and role grants are not updated. This targeted image
 update follows the [Container Apps update command](https://learn.microsoft.com/en-us/cli/azure/containerapp#az-containerapp-update)
 instead of replacing the app with an incomplete ARM template.
+
+The console's scheduled jobs run the same image: `job-spend-pacer` (container `spend-pacer`) and, when sign-in
+renewal is installed, `job-signin-renewer` (container `signin-renewer`). Only after the console revision is Healthy
+does the script move each job that exists and runs an `admin-ui` image from the console's registry to the same digest.
+A missing job, or one with another image or registry, is skipped and left unchanged. Each job's previous image and
+rollback command are printed before any change. After each job update the script compares the job's identity, trigger
+and schedule, secret names, registries and template, except the image, with the earlier settings. A difference stops
+the run with that job's rollback command, and the success message names the jobs it updated
+([job update command](https://learn.microsoft.com/en-us/cli/azure/containerapp/job#az-containerapp-job-update)).
 
 ## Check the console
 
@@ -124,12 +133,71 @@ If the page reports **Running configuration differs**, the image update does not
 file with later gateway changes. Those differences are reviewed before applying a Desktop policy; saving an old
 admin file can otherwise replace a later sign-in or model setting.
 
+## Spend history after the update
+
+From this version, the first `job-spend-pacer` run after the update creates the table `admin_console.spend_history`
+in the managed database and copies the gateway's past spend into it, from the oldest period the gateway still keeps
+(up to 13 months). Later runs, every 5 minutes, add to it; no existing table, cap, tag, audit event or role assignment
+is changed (admin-ui/server/spend-history.mjs:11, docs/TEST-PLAN.md:720). **Chargeback** > **Showing** then lists the closed periods
+([report a past period](how-to-organize-departments.md#report-a-past-period)). On the in-app database there is no
+history, and the page says so. A rollback to an earlier console image leaves the table in place; the earlier code does
+not read it, and a later update continues from it.
+
 ## Roll back the console image
 
 The updater prints the original image and an exact rollback command before making a change. The same image update
-command with that original reference restores the earlier console code. It does not undo configuration changes made
+command with that original reference restores the earlier console code. Each updated job has its own printed
+command, `az containerapp job update -g <group> -n <job> --container-name <container> --image <previous image>`,
+which restores that job's earlier code. Rollback does not undo configuration changes made
 through the console, or change the gateway's data.
 
 No automatic rollback overwrites a concurrent administrator's changes. If the preservation check reports a
 difference, the deployment settings are reviewed before using the printed rollback command
 ([image update command](https://learn.microsoft.com/en-us/cli/azure/containerapp#az-containerapp-update)).
+
+## Upgrade the gateway image
+
+A new Claude Code release reaches the gateway through
+[upgrade-gateway.mjs](../../scripts/admin/upgrade-gateway.mjs), which replaces only the `gateway` container image and
+compares the gateway's data before and after (ADR-0021, P-51). It works only with the managed PostgreSQL database:
+a gateway on the in-app database is refused, because a new revision starts that database empty
+(scripts/admin/upgrade-gateway.mjs:58). The signed-in Azure account needs the same build and Container App update
+permissions as the console update; reading the database from the installer machine needs a firewall rule for that
+machine's address, which `--temporary-firewall` adds for the run and removes at the end, also after a failure
+(scripts/admin/upgrade-gateway.mjs:161-170).
+
+```powershell
+node scripts/admin/upgrade-gateway.mjs --resource-group $rg --build --plan --temporary-firewall 'INSTALLER_PUBLIC_IPV4'
+node scripts/admin/upgrade-gateway.mjs --resource-group $rg --build --temporary-firewall 'INSTALLER_PUBLIC_IPV4'
+```
+
+`--build` builds `infra/azure-test/image` at the Claude Code version its Dockerfile pins and deploys the resulting
+digest; `--image` takes an existing `<registry>/claude-gateway@sha256:<digest>` from the app's own registry instead.
+`--profile` with a signed-in developer profile folder adds an inference request and a `/user/bootstrap` check
+([script reference](reference-scripts.md#upgrade-gatewaymjs)). `--plan` prints the running image, the target and the
+rollback command and takes the first snapshot; it builds and changes nothing.
+
+Each snapshot holds:
+
+- the gateway's table list and `_migrations` versions, and the row count and content hash of each table in our
+  `admin_console` schema, read in a `BEGIN READ ONLY` transaction (scripts/admin/gateway-upgrade.mjs:69-101);
+- whether `public.spend` still has the columns the spend history backfill expects (U-156);
+- spend caps, the newest audit events and each user's monthly spend, read through the documented admin API rather
+  than from the gateway's tables, so a release that changes its own tables does not cause a false rollback
+  ([spend limits](https://code.claude.com/docs/en/claude-apps-gateway-spend-limits));
+- `/healthz`, and with `--profile` inference, `/user/bootstrap`, its connector names and marketplace count.
+
+A failing check in the first snapshot stops the run before any change. After the swap, the script waits for a ready,
+Healthy revision and compares (scripts/admin/gateway-upgrade.mjs:113-151). A new gateway migration or table is
+reported as a note; a missing migration, a changed `admin_console` table, a cap change with no audit event, a missing
+audit event, a lower monthly spend, a failed check, changed connectors, or any other app setting that changed is a
+failure. On success the image is recorded in the installer's state file, so a later `app` stage keeps it
+(scripts/admin/upgrade-gateway.mjs:145-151).
+
+On a failure, the script swaps the previous image back and waits for that revision, then exits 1 with the failures and
+the rollback command; `--no-rollback` leaves the new image in place and only prints the command
+(scripts/admin/gateway-upgrade.mjs:196-205). The installer state is not changed. A new image that ran a database
+migration can leave a schema the previous image does not start on; the managed server's point-in-time restore is then
+the recovery path ([point-in-time restore](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-backup-restore)).
+On the Contoso test deployment on 2026-11-21, an upgrade to a new 2.1.311 build kept every compared item, and a
+non-gateway image whose revision failed to activate was rolled back to a Healthy revision (docs/TEST-PLAN.md, T-182).
