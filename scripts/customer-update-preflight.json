@@ -1,0 +1,44 @@
+{
+  "title": "Customer console update",
+  "checks": [
+    {
+      "name": "PowerShell 7",
+      "type": "version",
+      "command": "pwsh --version",
+      "min": "7.0.0",
+      "fix": "Install PowerShell 7 from https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows, then open a new terminal."
+    },
+    {
+      "name": "Git",
+      "type": "command",
+      "command": "git",
+      "fix": "Install Git for Windows from https://git-scm.com/download/win, then open a new terminal."
+    },
+    {
+      "name": "Azure CLI",
+      "type": "command",
+      "command": "az",
+      "fix": "Install Azure CLI from https://learn.microsoft.com/cli/azure/install-azure-cli-windows, then open a new terminal."
+    },
+    {
+      "name": "Container Apps extension",
+      "type": "script",
+      "run": "az extension show --name containerapp --query name -o tsv",
+      "contains": "containerapp",
+      "fix": "Run: az extension add --name containerapp --upgrade"
+    },
+    {
+      "name": "Azure CLI sign-in",
+      "type": "script",
+      "run": "az account show --query isDefault -o tsv",
+      "contains": "true",
+      "fix": "Run az login, then select the customer's subscription with az account set."
+    },
+    {
+      "name": "Update script",
+      "type": "path",
+      "path": "admin-ui/infra/Update-AdminUi.ps1",
+      "fix": "Open a terminal in the cloned claude-apps-gateway-foundry folder."
+    }
+  ]
+}

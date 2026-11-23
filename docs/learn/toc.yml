@@ -20,6 +20,10 @@
           href: how-to-use-admin-console.md
         - name: Update an existing admin console
           href: how-to-update-admin-console.md
+        - name: Customer guide: update an existing console
+          href: customer-update-existing-install.md
+        - name: Customer guide: configure connectors and plugins
+          href: customer-configure-connectors-plugins.md
         - name: Manage users, groups and budgets
           href: how-to-manage-users-and-groups.md
         - name: Group developers into departments and teams

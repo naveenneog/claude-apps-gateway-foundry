@@ -4,6 +4,30 @@
 > repository; the public repository holds copies of it as of each published revision, which its commit names
 > (ADR-0006).
 
+**P-35 customer-ready guides (2026-11-23):** Added two novice guides for an existing installation. The Windows update
+guide includes the safe preflight, read-only plan, image update, rollback references and nine screenshots. The Desktop
+setup guide shows role access, catalog and built-in connectors, a remote MCP example, Anthropic marketplaces, review
+and apply, with eight local-demo screenshots. The published screen values are placeholders or redacted test settings;
+the guides do not call Azure or change the live gateway. The preflight passed all six checks and failed as expected
+when the Azure CLI check was replaced with a missing command. T-66, Learn/media and update tests passed; the novice
+linters reported 0 errors and 0 warnings, and the secret scan was clean. The packet gate passed with 20 checks, 0
+failures, 3 warnings and 3 skips. ADR-0022 permits only the exact bold expected-result heading in the editorial
+detector; other reader-directing phrases remain errors.
+
+Council (self-review): Architect PASS (the guides reuse the existing update and per-role Desktop flows), Coder PASS
+(the editorial exception is limited to one exact heading and tested), QA PASS (60 targeted tests pass; preflight
+positive and negative runs; 17 images opened and reviewed), UX PASS (two task-focused guides; grade 8.4 and 8.5; a
+visible result and screenshot for each step), Security PASS (secret scan clean; tenant, subscription and client IDs are
+placeholders or masked; no Azure changes).
+
+**Spike: per-developer, per-model usage (2026-11-21, in progress):** For the customer's "per-teammate, per-model usage
+and cost, daily, through an API". On Contoso, one request per model with the client's console exporter: Sonnet 5's
+client cost matched the gateway within 0.01%, but `claude-opus-5`, served by deployment `claude-opus-5-5`, was 25%
+higher on the client, because the client prices the requested ID and the gateway the served model (U-160).
+Recommendation: money from the gateway, model split from client tokens priced at the served deployment's rates, with
+a "not attributed" remainder. Contoso relays no telemetry today; the relay measurements (U-112, U-113, U-115, U-118)
+remain (docs/spikes/api-per-developer-model-usage-spike.md).
+
 **P-50 spend history and a safe console update (2026-11-21):** The owner asked for chargeback history beyond the
 gateway's 13 months, and that an update of a customer's install not break its setup or permissions or erase spend or
 assignment data. Built per the ADR-0021 amendment: `job-spend-pacer` also records each user's day, ISO week and month
@@ -20,7 +44,8 @@ the existing job, so no Bicep redeploy or new grant; the gateway's table is read
 interactive; the page was proven with the same code and the live rows), UX PASS-WITH-NOTES (Period read "Month to date"
 beside a closed month; fixed to Monthly/Weekly/Daily and tested), Security PASS (no new secret, role or network change;
 read-only SQL on `public.*`; temporary firewall rule removed). The P-50 box stays unchecked for the same reason as P-51:
-its dependency chain reaches P-35, still active.
+its dependency chain reaches P-35, still active. Published to the public repository as `dc00823` (source `ba49f45`), with the
+connectors, plugins, P-50, P-51 and job-update changes; `verify-public.mjs` passed anonymously with 0 findings.
 
 **P-51 gateway image-only upgrade (2026-11-21):** Built `scripts/admin/upgrade-gateway.mjs` (CLI) and
 `scripts/admin/gateway-upgrade.mjs` (pure logic) per ADR-0021. It takes a snapshot before the swap (our

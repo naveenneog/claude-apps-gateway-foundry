@@ -185,7 +185,8 @@ export const EDITORIAL = /\b(?:it is important|importantly|note that|make sure|y
 
 export function editorialViolations(markdown) {
   return withoutFences(markdown)
-    .flatMap((line, i) => (EDITORIAL.test(line) ? [`line ${i + 1}: "${line.trim().slice(0, 80)}"`] : []));
+    .flatMap((line, i) => (EDITORIAL.test(line) && !/^\s*\*\*What you should see\*\*\s*$/.test(line)
+      ? [`line ${i + 1}: "${line.trim().slice(0, 80)}"`] : []));
 }
 
 // IDs the ledger defines: packets in the roadmap, test cases and parity scenarios in the test plan,

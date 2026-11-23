@@ -135,6 +135,11 @@ test('editorial rule flags reader-directing prose before and after fenced code, 
   assert.deepEqual(editorialViolations(md), ['line 2: "Note that this matters."', 'line 6: "You should see this."']);
 });
 
+test('editorial rule allows the novice guide expected-output heading, not the same phrase in prose', () => {
+  const md = '**What you should see**\nYou should see this result.\n';
+  assert.deepEqual(editorialViolations(md), ['line 2: "You should see this result."']);
+});
+
 test('stray-row rule reports pipe rows that belong to no table, outside fenced code', () => {
   const md = '| a | b |\n|---|---|\n| 1 | 2 |\n\n| 3 | 4 |\n```\n| fenced | row |\n```\n';
   assert.deepEqual(strayRows(md), ['line 5: "| 3 | 4 |"']);
