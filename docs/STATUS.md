@@ -18,7 +18,9 @@ Council (self-review): Architect PASS (the guides reuse the existing update and 
 (the editorial exception is limited to one exact heading and tested), QA PASS (60 targeted tests pass; preflight
 positive and negative runs; 17 images opened and reviewed), UX PASS (two task-focused guides; grade 8.4 and 8.5; a
 visible result and screenshot for each step), Security PASS (secret scan clean; tenant, subscription and client IDs are
-placeholders or masked; no Azure changes).
+placeholders or masked; no Azure changes). Public main now holds source `5c56f48` as commit `ddaebb4`; anonymous
+verification checked 311 files with 0 findings. The main-branch non-fast-forward and deletion protections remain
+active.
 
 **Spike: per-developer, per-model usage (2026-11-21, in progress):** For the customer's "per-teammate, per-model usage
 and cost, daily, through an API". On Contoso, one request per model with the client's console exporter: Sonnet 5's
